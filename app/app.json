@@ -1,0 +1,51 @@
+{
+  "expo": {
+    "name": "Second Brain",
+    "slug": "secondbrain",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "scheme": "secondbrain",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#0F0F0F"
+    },
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.secondbrain.app",
+      "infoPlist": {
+        "NSMicrophoneUsageDescription": "Second Brain needs microphone access to record your voice journal entries."
+      }
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#0F0F0F"
+      },
+      "permissions": ["RECORD_AUDIO"],
+      "package": "com.secondbrain.app",
+      "edgeToEdgeEnabled": true
+    },
+    "plugins": [
+      "expo-router",
+      [
+        "expo-sqlite",
+        {
+          "useSQLCipher": false
+        }
+      ],
+      [
+        "expo-av",
+        {
+          "microphonePermission": "Second Brain needs microphone access to record your voice journal entries."
+        }
+      ]
+    ],
+    "experiments": {
+      "typedRoutes": true
+    }
+  }
+}
