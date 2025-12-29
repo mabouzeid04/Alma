@@ -1,6 +1,6 @@
 import React from 'react';
 import { View, Text, StyleSheet, Pressable } from 'react-native';
-import { colors, spacing, borderRadius, typography } from '../theme';
+import { colors, spacing, borderRadius, typography, shadows } from '../theme';
 import { JournalSession } from '../types';
 import { format, isToday, isYesterday } from 'date-fns';
 import { haptics } from '../services/haptics';
@@ -18,11 +18,11 @@ export function SessionCard({ session, onPress }: SessionCardProps) {
 
   const getDateLabel = (date: Date): string => {
     if (isToday(date)) {
-      return 'Today';
+      return `Today, ${format(date, 'h:mm a')}`;
     } else if (isYesterday(date)) {
-      return 'Yesterday';
+      return `Yesterday, ${format(date, 'h:mm a')}`;
     } else {
-      return format(date, 'EEEE, MMM d');
+      return format(date, "MMM d, h:mm a");
     }
   };
 
@@ -59,7 +59,6 @@ export function SessionCard({ session, onPress }: SessionCardProps) {
     >
       <View style={styles.header}>
         <Text style={styles.date}>{getDateLabel(session.startedAt)}</Text>
-        <Text style={styles.time}>{format(session.startedAt, 'h:mm a')}</Text>
       </View>
 
       <Text style={styles.preview} numberOfLines={2}>
@@ -82,15 +81,17 @@ export function SessionCard({ session, onPress }: SessionCardProps) {
 
 const styles = StyleSheet.create({
   container: {
-    backgroundColor: colors.backgroundSecondary,
-    borderRadius: borderRadius.lg,
+    backgroundColor: colors.backgroundTertiary,
+    borderRadius: borderRadius.sm,
+    borderWidth: 1,
+    borderColor: colors.border,
     padding: spacing.md,
-    marginHorizontal: spacing.md,
+    marginHorizontal: spacing.sm,
     marginVertical: spacing.xs,
+    ...shadows.card,
   },
   pressed: {
     opacity: 0.8,
-    transform: [{ scale: 0.98 }],
   },
   header: {
     flexDirection: 'row',
@@ -99,17 +100,14 @@ const styles = StyleSheet.create({
     marginBottom: spacing.xs,
   },
   date: {
-    ...typography.headline,
+    ...typography.bodySemibold,
     color: colors.text,
   },
-  time: {
-    ...typography.subheadline,
-    color: colors.textSecondary,
-  },
   preview: {
-    ...typography.body,
+    ...typography.caption,
     color: colors.textSecondary,
     marginBottom: spacing.sm,
+    opacity: 0.8,
   },
   footer: {
     flexDirection: 'row',
@@ -120,7 +118,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   statValue: {
-    ...typography.caption1,
-    color: colors.textTertiary,
+    ...typography.small,
+    color: colors.textSecondary,
+    opacity: 0.6,
   },
 });
