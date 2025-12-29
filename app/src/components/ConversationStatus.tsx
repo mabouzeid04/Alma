@@ -2,7 +2,6 @@ import React from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 import { colors, spacing, typography } from '../theme';
 import { ConversationState } from '../types';
-import { WaveformVisualizer } from './WaveformVisualizer';
 
 interface ConversationStatusProps {
   state: ConversationState;
@@ -14,32 +13,27 @@ export function ConversationStatus({ state }: ConversationStatusProps) {
       case 'listening':
         return {
           label: 'Listening...',
-          color: colors.recording,
-          showWaveform: true,
+          color: colors.primary, // Warm orange
         };
       case 'processing':
         return {
-          label: 'Processing...',
-          color: colors.aiThinking,
-          showWaveform: false,
+          label: 'Thinking...',
+          color: colors.textSecondary,
         };
       case 'responding':
         return {
           label: 'Speaking...',
-          color: colors.aiSpeaking,
-          showWaveform: true,
+          color: colors.primary, // Warm orange
         };
       case 'paused':
         return {
           label: 'Paused',
           color: colors.textSecondary,
-          showWaveform: false,
         };
       default:
         return {
           label: '',
           color: colors.textTertiary,
-          showWaveform: false,
         };
     }
   };
@@ -52,14 +46,7 @@ export function ConversationStatus({ state }: ConversationStatusProps) {
 
   return (
     <View style={styles.container}>
-      {config.showWaveform && (
-        <WaveformVisualizer
-          isActive={true}
-          color={config.color}
-          barCount={5}
-          maxHeight={20}
-        />
-      )}
+      <View style={[styles.dot, { backgroundColor: config.color }]} />
       <Text style={[styles.label, { color: config.color }]}>
         {config.label}
       </Text>
@@ -73,10 +60,15 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     paddingVertical: spacing.sm,
-    gap: spacing.sm,
+    gap: spacing.xs,
+  },
+  dot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
   },
   label: {
-    ...typography.subheadline,
+    ...typography.caption,
     fontWeight: '500',
   },
 });

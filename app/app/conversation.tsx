@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useCallback } from 'react';
+import React, { useEffect, useRef, useCallback, useState } from 'react';
 import {
   View,
   Text,
@@ -9,15 +9,21 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
-import Animated, { FadeIn, FadeInDown, FadeOut } from 'react-native-reanimated';
+import Animated, {
+  FadeIn,
+  FadeInDown,
+  FadeOut,
+  SlideInDown,
+} from 'react-native-reanimated';
 import { colors, spacing, typography, borderRadius } from '../src/theme';
 import {
-  RecordButton,
   MessageBubble,
-  ConversationStatus,
+  WaveformVisualizer,
 } from '../src/components';
 import { useSession } from '../src/hooks';
 import { haptics } from '../src/services/haptics';
+
+type WaveformState = 'idle' | 'speaking' | 'processing' | 'aiSpeaking';
 
 export default function ConversationScreen() {
   const router = useRouter();
@@ -33,9 +39,22 @@ export default function ConversationScreen() {
     endSession,
   } = useSession();
 
+  // Map conversation state to waveform state
+  const getWaveformState = (): WaveformState => {
+    if (isRecording) return 'speaking';
+    if (conversationState === 'processing') return 'processing';
+    if (conversationState === 'responding') return 'aiSpeaking';
+    return 'idle';
+  };
+
   // Start session when screen mounts
   useEffect(() => {
     startSession();
+    // Auto-start recording after session starts
+    const timer = setTimeout(() => {
+      startRecording();
+    }, 500);
+    return () => clearTimeout(timer);
   }, []);
 
   // Auto-scroll to bottom when new messages arrive
@@ -45,69 +64,67 @@ export default function ConversationScreen() {
     }, 100);
   }, [messages]);
 
-  const handleRecordPress = useCallback(async () => {
-    if (isRecording) {
-      await stopRecording();
-    } else {
-      await startRecording();
+  // Haptic feedback when AI starts responding
+  useEffect(() => {
+    if (conversationState === 'responding') {
+      haptics.light();
     }
-  }, [isRecording, startRecording, stopRecording]);
+  }, [conversationState]);
 
-  const handleEndSession = useCallback(() => {
-    Alert.alert(
-      'End Session?',
-      'Your conversation will be saved.',
-      [
-        {
-          text: 'Cancel',
-          style: 'cancel',
-        },
-        {
-          text: 'End Session',
-          style: 'destructive',
-          onPress: async () => {
-            await endSession();
-            haptics.sessionEnded();
-            router.back();
+  const handleEndSession = useCallback(async () => {
+    // Check if session is very short (less than 10 seconds worth of content)
+    if (messages.length <= 1) {
+      Alert.alert(
+        'Short Session',
+        'Are you sure? Your session is very short.',
+        [
+          { text: 'Keep Talking', style: 'cancel' },
+          {
+            text: 'End Anyway',
+            style: 'destructive',
+            onPress: async () => {
+              await endSession();
+              haptics.sessionEnded();
+              router.replace('/processing');
+            },
           },
-        },
-      ]
-    );
-  }, [endSession, router]);
-
-  const handleClose = useCallback(() => {
-    if (messages.length > 1) {
-      handleEndSession();
+        ]
+      );
     } else {
-      router.back();
+      await endSession();
+      haptics.sessionEnded();
+      router.replace('/processing');
     }
-  }, [messages.length, handleEndSession, router]);
+  }, [messages.length, endSession, router]);
+
+  const handleDonePress = useCallback(() => {
+    if (isRecording) {
+      stopRecording();
+    }
+    handleEndSession();
+  }, [isRecording, stopRecording, handleEndSession]);
 
   return (
     <View style={styles.container}>
       <SafeAreaView style={styles.safeArea} edges={['top']}>
-        {/* Header */}
+        {/* Header - Done button only */}
         <Animated.View entering={FadeIn} style={styles.header}>
+          <View style={styles.headerSpacer} />
+
           <Pressable
-            onPress={handleClose}
+            onPress={handleDonePress}
             style={({ pressed }) => [
-              styles.closeButton,
+              styles.doneButton,
               pressed && styles.pressed,
             ]}
             hitSlop={20}
           >
-            <Text style={styles.closeText}>
-              {messages.length > 1 ? 'Done' : 'Cancel'}
-            </Text>
+            <Text style={styles.doneText}>Done</Text>
           </Pressable>
-
-          <ConversationStatus state={conversationState} />
-
-          <View style={styles.headerSpacer} />
         </Animated.View>
       </SafeAreaView>
 
-      {/* Messages */}
+      {/* Chat Transcript */}
       <ScrollView
         ref={scrollViewRef}
         style={styles.messagesContainer}
@@ -118,52 +135,50 @@ export default function ConversationScreen() {
           <MessageBubble
             key={message.id}
             message={message}
-            showTimestamp={index === messages.length - 1}
+            showTimestamp={false}
           />
         ))}
 
-        {/* Processing indicator */}
+        {/* AI Processing indicator */}
         {conversationState === 'processing' && (
           <Animated.View
-            entering={FadeInDown}
-            exiting={FadeOut}
+            entering={FadeInDown.duration(200)}
+            exiting={FadeOut.duration(150)}
             style={styles.processingContainer}
           >
             <View style={styles.processingBubble}>
               <View style={styles.typingDots}>
-                <View style={[styles.dot, styles.dot1]} />
-                <View style={[styles.dot, styles.dot2]} />
-                <View style={[styles.dot, styles.dot3]} />
+                <Animated.View
+                  style={[styles.dot]}
+                  entering={FadeIn.delay(0).duration(300)}
+                />
+                <Animated.View
+                  style={[styles.dot]}
+                  entering={FadeIn.delay(150).duration(300)}
+                />
+                <Animated.View
+                  style={[styles.dot]}
+                  entering={FadeIn.delay(300).duration(300)}
+                />
               </View>
             </View>
           </Animated.View>
         )}
       </ScrollView>
 
-      {/* Bottom Controls */}
-      <SafeAreaView edges={['bottom']} style={styles.bottomSafeArea}>
-        <Animated.View
-          entering={FadeInDown.delay(200)}
-          style={styles.controlsContainer}
-        >
-          <View style={styles.recordWrapper}>
-            <RecordButton
-              isRecording={isRecording}
-              onPress={handleRecordPress}
-              size={72}
-              disabled={conversationState === 'processing'}
-            />
-          </View>
+      {/* Waveform - Bottom third */}
+      <Animated.View
+        entering={SlideInDown.delay(300).springify()}
+        style={styles.waveformContainer}
+      >
+        <WaveformVisualizer
+          state={getWaveformState()}
+          barCount={12}
+          height={80}
+        />
+      </Animated.View>
 
-          <Text style={styles.hint}>
-            {isRecording
-              ? 'Tap to stop'
-              : conversationState === 'processing'
-              ? 'Processing...'
-              : 'Tap to speak'}
-          </Text>
-        </Animated.View>
-      </SafeAreaView>
+      <SafeAreaView edges={['bottom']} style={styles.bottomSafe} />
     </View>
   );
 }
@@ -182,19 +197,18 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.sm,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: colors.border,
   },
-  closeButton: {
+  headerSpacer: {
+    flex: 1,
+  },
+  doneButton: {
     paddingVertical: spacing.xs,
     paddingHorizontal: spacing.sm,
   },
-  closeText: {
-    ...typography.headline,
-    color: colors.primary,
-  },
-  headerSpacer: {
-    width: 60,
+  doneText: {
+    ...typography.body,
+    color: colors.text,
+    fontWeight: '500',
   },
   pressed: {
     opacity: 0.6,
@@ -208,13 +222,13 @@ const styles = StyleSheet.create({
   },
   processingContainer: {
     marginVertical: spacing.xs,
-    marginHorizontal: spacing.md,
+    marginHorizontal: spacing.lg,
     alignSelf: 'flex-start',
   },
   processingBubble: {
     backgroundColor: colors.aiBubble,
-    borderRadius: borderRadius.lg,
-    borderBottomLeftRadius: borderRadius.sm,
+    borderRadius: borderRadius.md,
+    borderBottomLeftRadius: borderRadius.xs,
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.sm,
   },
@@ -228,30 +242,12 @@ const styles = StyleSheet.create({
     height: 8,
     borderRadius: 4,
     backgroundColor: colors.textSecondary,
-  },
-  dot1: {
-    opacity: 0.4,
-  },
-  dot2: {
     opacity: 0.6,
   },
-  dot3: {
-    opacity: 0.8,
+  waveformContainer: {
+    paddingBottom: spacing.sm,
   },
-  bottomSafeArea: {
+  bottomSafe: {
     backgroundColor: colors.background,
-  },
-  controlsContainer: {
-    alignItems: 'center',
-    paddingVertical: spacing.lg,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: colors.border,
-  },
-  recordWrapper: {
-    marginBottom: spacing.sm,
-  },
-  hint: {
-    ...typography.footnote,
-    color: colors.textTertiary,
   },
 });

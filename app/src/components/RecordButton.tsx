@@ -7,7 +7,8 @@ import {
   Easing,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
-import { colors, spacing, borderRadius } from '../theme';
+import { Ionicons } from '@expo/vector-icons';
+import { colors, spacing, shadows } from '../theme';
 import { haptics } from '../services/haptics';
 
 interface RecordButtonProps {
@@ -138,7 +139,7 @@ export function RecordButton({
           <LinearGradient
             colors={
               isRecording
-                ? [colors.recording, '#DC2626']
+                ? [colors.error, '#B84C4C']
                 : [colors.primary, colors.primaryDark]
             }
             start={{ x: 0, y: 0 }}
@@ -148,11 +149,11 @@ export function RecordButton({
               { borderRadius: size / 2 },
             ]}
           >
-            {/* Inner icon */}
-            <View
-              style={[
-                isRecording ? styles.stopIcon : styles.micIcon,
-              ]}
+            {/* Icon */}
+            <Ionicons
+              name={isRecording ? "stop" : "mic"}
+              size={size * 0.35}
+              color="#FFFFFF"
             />
           </LinearGradient>
         </Pressable>
@@ -168,30 +169,14 @@ const styles = StyleSheet.create({
   },
   glow: {
     position: 'absolute',
-    backgroundColor: colors.recordingGlow,
+    backgroundColor: colors.orbGlow,
   },
   button: {
-    shadowColor: colors.primary,
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 12,
-    elevation: 8,
+    ...shadows.orb,
   },
   gradient: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-  },
-  micIcon: {
-    width: 24,
-    height: 32,
-    backgroundColor: colors.text,
-    borderRadius: 12,
-  },
-  stopIcon: {
-    width: 24,
-    height: 24,
-    backgroundColor: colors.text,
-    borderRadius: 4,
   },
 });
