@@ -1,199 +1,201 @@
-import React, { useCallback } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import {
   View,
   Text,
   StyleSheet,
-  Pressable,
+  Dimensions,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
-import { LinearGradient } from 'expo-linear-gradient';
-import Animated, { FadeIn, FadeInUp } from 'react-native-reanimated';
-import { colors, spacing, typography, borderRadius } from '../src/theme';
-import { RecordButton } from '../src/components';
+import Animated, {
+  FadeIn,
+  FadeInUp,
+  useSharedValue,
+  useAnimatedStyle,
+  withSpring,
+  runOnJS,
+} from 'react-native-reanimated';
+import {
+  Gesture,
+  GestureDetector,
+} from 'react-native-gesture-handler';
+import { colors, spacing, typography } from '../src/theme';
+import { PulsingOrb } from '../src/components';
 import { haptics } from '../src/services/haptics';
 import { useSessions } from '../src/hooks';
+
+const { height: SCREEN_HEIGHT } = Dimensions.get('window');
+const SWIPE_THRESHOLD = 100;
 
 export default function HomeScreen() {
   const router = useRouter();
   const { sessions } = useSessions();
-  const recentSession = sessions[0];
+  const [userName] = useState(''); // Can be personalized later
+  const translateY = useSharedValue(0);
+
+  // Calculate session count and streak
+  const sessionCount = sessions.length;
+  const streak = calculateStreak(sessions);
 
   const handleStartSession = useCallback(() => {
     haptics.medium();
     router.push('/conversation');
   }, [router]);
 
-  const handleViewHistory = useCallback(() => {
+  const navigateToHistory = useCallback(() => {
     haptics.light();
     router.push('/history');
   }, [router]);
 
+  // Swipe up gesture for history
+  const panGesture = Gesture.Pan()
+    .onUpdate((event) => {
+      if (event.translationY < 0) {
+        translateY.value = event.translationY * 0.3;
+      }
+    })
+    .onEnd((event) => {
+      if (event.translationY < -SWIPE_THRESHOLD) {
+        runOnJS(navigateToHistory)();
+      }
+      translateY.value = withSpring(0, { damping: 20, stiffness: 300 });
+    });
+
+  const animatedStyle = useAnimatedStyle(() => ({
+    transform: [{ translateY: translateY.value }],
+  }));
+
   const getGreetingMessage = () => {
     const hour = new Date().getHours();
-    if (hour < 12) return 'Good morning';
-    if (hour < 17) return 'Good afternoon';
-    if (hour < 21) return 'Good evening';
-    return 'Good night';
+    const name = userName ? `, ${userName}` : '';
+
+    if (hour >= 5 && hour < 12) return `Good morning${name}`;
+    if (hour >= 12 && hour < 18) return `Good afternoon${name}`;
+    if (hour >= 18 && hour < 23) return `Good evening${name}`;
+    return `Still up${name}?`;
   };
 
   return (
-    <LinearGradient
-      colors={[colors.background, '#0A0A0F']}
-      style={styles.gradient}
-    >
-      <SafeAreaView style={styles.container}>
-        {/* Header */}
-        <Animated.View entering={FadeIn.delay(100)} style={styles.header}>
-          <Text style={styles.greeting}>{getGreetingMessage()}</Text>
-          <Text style={styles.subtitle}>What's on your mind?</Text>
-        </Animated.View>
-
-        {/* Center - Main Record Button */}
-        <Animated.View
-          entering={FadeInUp.delay(200).springify()}
-          style={styles.centerContainer}
-        >
-          <View style={styles.recordContainer}>
-            <RecordButton
-              isRecording={false}
-              onPress={handleStartSession}
-              size={100}
-            />
-            <Text style={styles.recordHint}>Tap to start talking</Text>
-          </View>
-        </Animated.View>
-
-        {/* Bottom - Quick Actions */}
-        <Animated.View
-          entering={FadeInUp.delay(300)}
-          style={styles.bottomContainer}
-        >
-          {/* Recent Session Preview */}
-          {recentSession && (
-            <Pressable
-              onPress={() => router.push(`/session/${recentSession.id}`)}
-              style={({ pressed }) => [
-                styles.recentCard,
-                pressed && styles.pressed,
-              ]}
+    <GestureDetector gesture={panGesture}>
+      <View style={styles.container}>
+        <SafeAreaView style={styles.safeArea}>
+          <Animated.View style={[styles.content, animatedStyle]}>
+            {/* Greeting - Top third */}
+            <Animated.View
+              entering={FadeIn.delay(100).duration(500)}
+              style={styles.greetingContainer}
             >
-              <View style={styles.recentHeader}>
-                <Text style={styles.recentLabel}>Last session</Text>
-                <Text style={styles.recentTime}>
-                  {formatRelativeTime(recentSession.startedAt)}
-                </Text>
-              </View>
-              <Text style={styles.recentPreview} numberOfLines={2}>
-                {recentSession.messages.find((m) => m.isUser)?.content ||
-                  'No messages'}
-              </Text>
-            </Pressable>
-          )}
+              <Text style={styles.greeting}>{getGreetingMessage()}</Text>
+            </Animated.View>
 
-          {/* History Button */}
-          <Pressable
-            onPress={handleViewHistory}
-            style={({ pressed }) => [
-              styles.historyButton,
-              pressed && styles.pressed,
-            ]}
-          >
-            <Text style={styles.historyButtonText}>View all sessions</Text>
-          </Pressable>
-        </Animated.View>
-      </SafeAreaView>
-    </LinearGradient>
+            {/* Pulsing Orb - Center */}
+            <Animated.View
+              entering={FadeInUp.delay(200).springify()}
+              style={styles.orbContainer}
+            >
+              <PulsingOrb
+                onPress={handleStartSession}
+                size={120}
+              />
+              <Text style={styles.hintText}>Tap to start talking</Text>
+            </Animated.View>
+
+            {/* Metadata - Bottom third */}
+            <Animated.View
+              entering={FadeIn.delay(400).duration(500)}
+              style={styles.metadataContainer}
+            >
+              {sessionCount > 0 && (
+                <Text style={styles.metadataText}>
+                  Session {sessionCount + 1}
+                  {streak > 1 ? ` · ${streak} day streak` : ''}
+                </Text>
+              )}
+
+              <Text style={styles.swipeHint}>
+                ↑ Swipe up for history
+              </Text>
+            </Animated.View>
+          </Animated.View>
+        </SafeAreaView>
+      </View>
+    </GestureDetector>
   );
 }
 
-function formatRelativeTime(date: Date): string {
-  const now = new Date();
-  const diffMs = now.getTime() - date.getTime();
-  const diffMins = Math.floor(diffMs / 60000);
-  const diffHours = Math.floor(diffMs / 3600000);
-  const diffDays = Math.floor(diffMs / 86400000);
+// Calculate streak based on consecutive days with sessions
+function calculateStreak(sessions: any[]): number {
+  if (sessions.length === 0) return 0;
 
-  if (diffMins < 1) return 'Just now';
-  if (diffMins < 60) return `${diffMins}m ago`;
-  if (diffHours < 24) return `${diffHours}h ago`;
-  if (diffDays === 1) return 'Yesterday';
-  if (diffDays < 7) return `${diffDays} days ago`;
-  return date.toLocaleDateString();
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  // Get unique dates with sessions
+  const sessionDates = new Set(
+    sessions.map(s => {
+      const d = new Date(s.startedAt);
+      d.setHours(0, 0, 0, 0);
+      return d.getTime();
+    })
+  );
+
+  let streak = 0;
+  let currentDate = new Date(today);
+
+  while (sessionDates.has(currentDate.getTime())) {
+    streak++;
+    currentDate.setDate(currentDate.getDate() - 1);
+  }
+
+  return streak;
 }
 
 const styles = StyleSheet.create({
-  gradient: {
+  container: {
+    flex: 1,
+    backgroundColor: colors.background,
+  },
+  safeArea: {
     flex: 1,
   },
-  container: {
+  content: {
     flex: 1,
     paddingHorizontal: spacing.lg,
   },
-  header: {
-    paddingTop: spacing.xl,
-    paddingBottom: spacing.lg,
+  greetingContainer: {
+    paddingTop: spacing.xxxxl, // 60px from safe area
+    alignItems: 'center',
   },
   greeting: {
-    ...typography.largeTitle,
+    ...typography.h1,
     color: colors.text,
-    marginBottom: spacing.xxs,
+    textAlign: 'center',
   },
-  subtitle: {
-    ...typography.title3,
-    color: colors.textSecondary,
-  },
-  centerContainer: {
+  orbContainer: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  recordContainer: {
-    alignItems: 'center',
-  },
-  recordHint: {
-    ...typography.subheadline,
-    color: colors.textTertiary,
-    marginTop: spacing.lg,
-  },
-  bottomContainer: {
-    paddingBottom: spacing.xl,
-    gap: spacing.md,
-  },
-  recentCard: {
-    backgroundColor: colors.backgroundSecondary,
-    borderRadius: borderRadius.lg,
-    padding: spacing.md,
-  },
-  recentHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: spacing.xs,
-  },
-  recentLabel: {
-    ...typography.footnote,
+  hintText: {
+    ...typography.caption,
     color: colors.textSecondary,
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
+    opacity: 0.5,
+    marginTop: spacing.md, // 16px below orb
   },
-  recentTime: {
-    ...typography.caption1,
-    color: colors.textTertiary,
-  },
-  recentPreview: {
-    ...typography.body,
-    color: colors.text,
-  },
-  historyButton: {
+  metadataContainer: {
+    paddingBottom: spacing.md,
     alignItems: 'center',
-    paddingVertical: spacing.md,
   },
-  historyButtonText: {
-    ...typography.headline,
-    color: colors.primary,
+  metadataText: {
+    ...typography.caption,
+    color: colors.textSecondary,
+    opacity: 0.6,
+    marginBottom: spacing.xxxl, // 40px from bottom safe area
   },
-  pressed: {
-    opacity: 0.7,
+  swipeHint: {
+    ...typography.small,
+    color: colors.textSecondary,
+    opacity: 0.4, // Very muted
+    marginBottom: spacing.md,
   },
 });

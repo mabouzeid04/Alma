@@ -1,6 +1,6 @@
 import React from 'react';
 import { View, Text, StyleSheet } from 'react-native';
-import Animated, { FadeInUp } from 'react-native-reanimated';
+import Animated, { FadeInUp, FadeIn } from 'react-native-reanimated';
 import { colors, spacing, borderRadius, typography } from '../theme';
 import { Message } from '../types';
 import { format } from 'date-fns';
@@ -8,14 +8,19 @@ import { format } from 'date-fns';
 interface MessageBubbleProps {
   message: Message;
   showTimestamp?: boolean;
+  isLive?: boolean;  // For real-time transcription display
 }
 
-export function MessageBubble({ message, showTimestamp = false }: MessageBubbleProps) {
+export function MessageBubble({
+  message,
+  showTimestamp = false,
+  isLive = false,
+}: MessageBubbleProps) {
   const isUser = message.isUser;
 
   return (
     <Animated.View
-      entering={FadeInUp.duration(300).springify()}
+      entering={isLive ? FadeIn.duration(150) : FadeInUp.duration(300).springify()}
       style={[
         styles.container,
         isUser ? styles.userContainer : styles.aiContainer,
@@ -44,48 +49,51 @@ export function MessageBubble({ message, showTimestamp = false }: MessageBubbleP
 const styles = StyleSheet.create({
   container: {
     marginVertical: spacing.xs,
-    marginHorizontal: spacing.md,
-    maxWidth: '80%',
+    marginHorizontal: spacing.lg,
+    maxWidth: '75%',
   },
   userContainer: {
     alignSelf: 'flex-end',
   },
   aiContainer: {
     alignSelf: 'flex-start',
+    marginBottom: spacing.sm,  // 12px margin for AI bubbles
   },
   bubble: {
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-    borderRadius: borderRadius.lg,
+    paddingHorizontal: spacing.md,  // 16px padding
+    paddingVertical: spacing.sm,    // 12px padding
+    borderRadius: borderRadius.md,  // 16px corner radius
   },
   userBubble: {
-    backgroundColor: colors.userBubble,
-    borderBottomRightRadius: borderRadius.sm,
+    backgroundColor: colors.userBubble,  // Soft peach #F4B59F
+    borderBottomRightRadius: borderRadius.xs,  // Tail effect
   },
   aiBubble: {
-    backgroundColor: colors.aiBubble,
-    borderBottomLeftRadius: borderRadius.sm,
+    backgroundColor: colors.aiBubble,  // Tan #D4C5B0
+    borderBottomLeftRadius: borderRadius.xs,  // Tail effect
   },
   text: {
-    ...typography.body,
-    lineHeight: 22,
+    ...typography.bodyLarge,
+    fontSize: 16,
+    lineHeight: 24,
   },
   userText: {
-    color: colors.text,
+    color: colors.text,  // Deep brown
   },
   aiText: {
-    color: colors.text,
+    color: colors.text,  // Deep brown
   },
   timestamp: {
-    ...typography.caption2,
+    ...typography.caption,
     marginTop: spacing.xxs,
+    opacity: 0.6,
   },
   userTimestamp: {
-    color: colors.textTertiary,
+    color: colors.textSecondary,
     textAlign: 'right',
   },
   aiTimestamp: {
-    color: colors.textTertiary,
+    color: colors.textSecondary,
     textAlign: 'left',
   },
 });

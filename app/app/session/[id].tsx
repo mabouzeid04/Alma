@@ -9,15 +9,21 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
-import Animated, { FadeIn, FadeInUp } from 'react-native-reanimated';
+import Animated, {
+  FadeIn,
+  FadeInUp,
+  useSharedValue,
+  useAnimatedStyle,
+  withTiming,
+} from 'react-native-reanimated';
+import { Ionicons } from '@expo/vector-icons';
 import { format } from 'date-fns';
 import { colors, spacing, typography, borderRadius } from '../../src/theme';
 import { MessageBubble } from '../../src/components';
 import { useSessions } from '../../src/hooks';
 import { haptics } from '../../src/services/haptics';
-import { JournalSession } from '../../src/types';
+import { JournalSession, MemoryNode } from '../../src/types';
 import * as database from '../../src/services/database';
-import { MemoryNode } from '../../src/types';
 
 export default function SessionDetailScreen() {
   const router = useRouter();
@@ -26,6 +32,11 @@ export default function SessionDetailScreen() {
   const [session, setSession] = useState<JournalSession | null>(null);
   const [memoryNode, setMemoryNode] = useState<MemoryNode | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [isTranscriptExpanded, setIsTranscriptExpanded] = useState(false);
+
+  // Animation for transcript expand/collapse
+  const transcriptHeight = useSharedValue(0);
+  const arrowRotation = useSharedValue(0);
 
   useEffect(() => {
     async function loadSession() {
@@ -55,20 +66,17 @@ export default function SessionDetailScreen() {
 
   const handleDelete = useCallback(() => {
     Alert.alert(
-      'Delete Session?',
-      'This action cannot be undone.',
+      'Delete Session',
+      "Delete this session? This can't be undone.",
       [
-        {
-          text: 'Cancel',
-          style: 'cancel',
-        },
+        { text: 'Cancel', style: 'cancel' },
         {
           text: 'Delete',
           style: 'destructive',
           onPress: async () => {
             if (id) {
               await deleteSession(id);
-              haptics.success();
+              haptics.warning();
               router.back();
             }
           },
@@ -77,14 +85,18 @@ export default function SessionDetailScreen() {
     );
   }, [id, deleteSession, router]);
 
-  const formatDuration = (seconds: number): string => {
-    const mins = Math.floor(seconds / 60);
-    const secs = Math.floor(seconds % 60);
-    if (mins > 0) {
-      return `${mins}m ${secs}s`;
-    }
-    return `${secs}s`;
-  };
+  const toggleTranscript = useCallback(() => {
+    haptics.light();
+    setIsTranscriptExpanded((prev) => {
+      const newState = !prev;
+      arrowRotation.value = withTiming(newState ? 180 : 0, { duration: 300 });
+      return newState;
+    });
+  }, []);
+
+  const arrowAnimatedStyle = useAnimatedStyle(() => ({
+    transform: [{ rotate: `${arrowRotation.value}deg` }],
+  }));
 
   if (isLoading) {
     return (
@@ -102,6 +114,8 @@ export default function SessionDetailScreen() {
     );
   }
 
+  const headerDate = format(session.startedAt, "MMM d, h:mm a");
+
   return (
     <View style={styles.container}>
       <SafeAreaView style={styles.safeArea} edges={['top']}>
@@ -115,10 +129,10 @@ export default function SessionDetailScreen() {
             ]}
             hitSlop={20}
           >
-            <Text style={styles.backText}>Back</Text>
+            <Ionicons name="arrow-back" size={24} color={colors.text} />
           </Pressable>
 
-          <Text style={styles.title}>Session</Text>
+          <Text style={styles.headerDate}>{headerDate}</Text>
 
           <Pressable
             onPress={handleDelete}
@@ -128,7 +142,7 @@ export default function SessionDetailScreen() {
             ]}
             hitSlop={20}
           >
-            <Text style={styles.deleteText}>Delete</Text>
+            <Ionicons name="trash-outline" size={22} color={colors.delete} />
           </Pressable>
         </Animated.View>
       </SafeAreaView>
@@ -138,60 +152,102 @@ export default function SessionDetailScreen() {
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
       >
-        {/* Session Info */}
-        <Animated.View entering={FadeInUp.delay(100)} style={styles.infoCard}>
-          <Text style={styles.dateText}>
-            {format(session.startedAt, "EEEE, MMMM d 'at' h:mm a")}
-          </Text>
-          <View style={styles.statsRow}>
-            <View style={styles.stat}>
-              <Text style={styles.statValue}>{formatDuration(session.duration)}</Text>
-              <Text style={styles.statLabel}>Duration</Text>
-            </View>
-            <View style={styles.stat}>
-              <Text style={styles.statValue}>{session.messages.length}</Text>
-              <Text style={styles.statLabel}>Messages</Text>
-            </View>
-            <View style={styles.stat}>
-              <Text style={styles.statValue}>{session.wordCount}</Text>
-              <Text style={styles.statLabel}>Words</Text>
-            </View>
+        {/* Summary Section - Always Visible */}
+        <Animated.View entering={FadeInUp.delay(100)}>
+          <View style={styles.divider}>
+            <View style={styles.dividerLine} />
+            <Text style={styles.dividerText}>Summary</Text>
+            <View style={styles.dividerLine} />
           </View>
+
+          {memoryNode?.summary ? (
+            <View style={styles.summarySection}>
+              <Text style={styles.summaryText}>{memoryNode.summary}</Text>
+
+              {/* Topics Tags */}
+              {memoryNode.topics && memoryNode.topics.length > 0 && (
+                <View style={styles.tagsSection}>
+                  <Text style={styles.tagLabel}>Topics:</Text>
+                  <View style={styles.tagsContainer}>
+                    {memoryNode.topics.map((topic, index) => (
+                      <View key={index} style={styles.tag}>
+                        <Text style={styles.tagText}>{topic}</Text>
+                      </View>
+                    ))}
+                  </View>
+                </View>
+              )}
+
+              {/* Emotions Tags */}
+              {memoryNode.emotions && memoryNode.emotions.length > 0 && (
+                <View style={styles.tagsSection}>
+                  <Text style={styles.tagLabel}>Emotions:</Text>
+                  <View style={styles.tagsContainer}>
+                    {memoryNode.emotions.map((emotion, index) => (
+                      <View key={index} style={[styles.tag, styles.emotionTag]}>
+                        <Text style={styles.tagText}>{emotion}</Text>
+                      </View>
+                    ))}
+                  </View>
+                </View>
+              )}
+            </View>
+          ) : (
+            <View style={styles.summarySection}>
+              <Text style={styles.summaryText}>
+                Processing summary...
+              </Text>
+            </View>
+          )}
         </Animated.View>
 
-        {/* Memory Summary */}
-        {memoryNode && memoryNode.summary && (
-          <Animated.View entering={FadeInUp.delay(150)} style={styles.summaryCard}>
-            <Text style={styles.sectionTitle}>Summary</Text>
-            <Text style={styles.summaryText}>{memoryNode.summary}</Text>
+        {/* Transcript Section - Collapsible */}
+        <Animated.View entering={FadeInUp.delay(200)}>
+          <View style={styles.divider}>
+            <View style={styles.dividerLine} />
+            <Text style={styles.dividerText}>Transcript</Text>
+            <View style={styles.dividerLine} />
+          </View>
 
-            {memoryNode.topics.length > 0 && (
-              <View style={styles.tagsContainer}>
-                {memoryNode.topics.map((topic, index) => (
-                  <View key={index} style={styles.tag}>
-                    <Text style={styles.tagText}>{topic}</Text>
-                  </View>
-                ))}
-              </View>
-            )}
+          <Pressable
+            onPress={toggleTranscript}
+            style={styles.expandButton}
+          >
+            <Text style={styles.expandButtonText}>
+              {isTranscriptExpanded ? 'Collapse' : 'Expand'}
+            </Text>
+            <Animated.View style={arrowAnimatedStyle}>
+              <Ionicons
+                name="chevron-down"
+                size={18}
+                color={colors.textSecondary}
+              />
+            </Animated.View>
+          </Pressable>
 
-            {memoryNode.emotions.length > 0 && (
-              <View style={styles.emotionsContainer}>
-                <Text style={styles.emotionsLabel}>Emotions:</Text>
-                <Text style={styles.emotionsText}>
-                  {memoryNode.emotions.join(', ')}
-                </Text>
-              </View>
-            )}
-          </Animated.View>
-        )}
+          {isTranscriptExpanded && (
+            <Animated.View
+              entering={FadeIn.duration(200)}
+              style={styles.transcriptSection}
+            >
+              {session.messages.map((message) => (
+                <MessageBubble key={message.id} message={message} />
+              ))}
+            </Animated.View>
+          )}
+        </Animated.View>
 
-        {/* Messages */}
-        <Animated.View entering={FadeInUp.delay(200)} style={styles.messagesSection}>
-          <Text style={styles.sectionTitle}>Conversation</Text>
-          {session.messages.map((message) => (
-            <MessageBubble key={message.id} message={message} />
-          ))}
+        {/* Delete Button at Bottom */}
+        <Animated.View entering={FadeIn.delay(300)} style={styles.bottomActions}>
+          <Pressable
+            onPress={handleDelete}
+            style={({ pressed }) => [
+              styles.deleteSessionButton,
+              pressed && styles.pressed,
+            ]}
+          >
+            <Text style={styles.deleteSessionText}>Delete Session</Text>
+          </Pressable>
         </Animated.View>
       </ScrollView>
     </View>
@@ -222,28 +278,17 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.sm,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: colors.border,
+    height: 60,
   },
   backButton: {
-    paddingVertical: spacing.xs,
-    paddingHorizontal: spacing.sm,
+    padding: spacing.xs,
   },
-  backText: {
-    ...typography.headline,
-    color: colors.primary,
-  },
-  title: {
-    ...typography.headline,
+  headerDate: {
+    ...typography.bodySemibold,
     color: colors.text,
   },
   deleteButton: {
-    paddingVertical: spacing.xs,
-    paddingHorizontal: spacing.sm,
-  },
-  deleteText: {
-    ...typography.headline,
-    color: colors.error,
+    padding: spacing.xs,
   },
   pressed: {
     opacity: 0.6,
@@ -252,86 +297,90 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   scrollContent: {
-    paddingVertical: spacing.md,
     paddingBottom: spacing.xxxl,
   },
-  infoCard: {
-    backgroundColor: colors.backgroundSecondary,
-    marginHorizontal: spacing.md,
-    borderRadius: borderRadius.lg,
-    padding: spacing.md,
-    marginBottom: spacing.md,
-  },
-  dateText: {
-    ...typography.headline,
-    color: colors.text,
-    marginBottom: spacing.md,
-  },
-  statsRow: {
+  divider: {
     flexDirection: 'row',
-    justifyContent: 'space-around',
-  },
-  stat: {
     alignItems: 'center',
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.md,
   },
-  statValue: {
-    ...typography.title2,
-    color: colors.primary,
+  dividerLine: {
+    flex: 1,
+    height: 1,
+    backgroundColor: colors.border,
   },
-  statLabel: {
-    ...typography.caption1,
+  dividerText: {
+    ...typography.caption,
     color: colors.textSecondary,
-    marginTop: spacing.xxs,
+    paddingHorizontal: spacing.sm,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
   },
-  summaryCard: {
-    backgroundColor: colors.backgroundSecondary,
+  summarySection: {
+    paddingHorizontal: spacing.lg,
+    backgroundColor: colors.backgroundTertiary,
     marginHorizontal: spacing.md,
-    borderRadius: borderRadius.lg,
-    padding: spacing.md,
-    marginBottom: spacing.md,
-  },
-  sectionTitle: {
-    ...typography.headline,
-    color: colors.text,
-    marginBottom: spacing.sm,
+    borderRadius: borderRadius.md,
+    padding: spacing.lg,
   },
   summaryText: {
-    ...typography.body,
+    ...typography.bodyLarge,
+    color: colors.text,
+    lineHeight: 28.8,
+  },
+  tagsSection: {
+    marginTop: spacing.md,
+  },
+  tagLabel: {
+    ...typography.caption,
     color: colors.textSecondary,
-    lineHeight: 24,
+    marginBottom: spacing.xs,
   },
   tagsContainer: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: spacing.xs,
-    marginTop: spacing.md,
   },
   tag: {
-    backgroundColor: colors.primary + '20',
+    backgroundColor: colors.tagBackground,
     paddingHorizontal: spacing.sm,
-    paddingVertical: spacing.xxs,
-    borderRadius: borderRadius.full,
+    paddingVertical: 6,
+    borderRadius: borderRadius.sm,
+  },
+  emotionTag: {
+    // Optional different styling for emotion tags
   },
   tagText: {
-    ...typography.caption1,
-    color: colors.primary,
+    ...typography.small,
+    color: colors.text,
   },
-  emotionsContainer: {
+  expandButton: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginTop: spacing.sm,
+    justifyContent: 'center',
+    paddingVertical: spacing.sm,
+    gap: spacing.xxs,
   },
-  emotionsLabel: {
-    ...typography.footnote,
-    color: colors.textTertiary,
-    marginRight: spacing.xs,
-  },
-  emotionsText: {
-    ...typography.footnote,
+  expandButtonText: {
+    ...typography.caption,
     color: colors.textSecondary,
   },
-  messagesSection: {
-    marginHorizontal: spacing.md,
-    marginTop: spacing.sm,
+  transcriptSection: {
+    paddingTop: spacing.sm,
+    paddingBottom: spacing.md,
+  },
+  bottomActions: {
+    alignItems: 'center',
+    marginTop: spacing.xl,
+    paddingBottom: spacing.lg,
+  },
+  deleteSessionButton: {
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.lg,
+  },
+  deleteSessionText: {
+    ...typography.caption,
+    color: colors.delete,
   },
 });

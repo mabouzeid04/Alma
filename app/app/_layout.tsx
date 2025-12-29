@@ -14,7 +14,7 @@ export default function RootLayout() {
 
   return (
     <GestureHandlerRootView style={styles.container}>
-      <StatusBar style="light" />
+      <StatusBar style="dark" />
       <Stack
         screenOptions={{
           headerShown: false,
@@ -30,7 +30,27 @@ export default function RootLayout() {
             gestureEnabled: false,
           }}
         />
-        <Stack.Screen name="history" />
+        <Stack.Screen
+          name="processing"
+          options={{
+            animation: 'fade',
+            gestureEnabled: false,
+          }}
+        />
+        <Stack.Screen
+          name="summary"
+          options={{
+            animation: 'slide_from_bottom',
+            gestureEnabled: true,
+          }}
+        />
+        <Stack.Screen
+          name="history"
+          options={{
+            animation: 'slide_from_bottom',
+            presentation: 'modal',
+          }}
+        />
         <Stack.Screen
           name="session/[id]"
           options={{
