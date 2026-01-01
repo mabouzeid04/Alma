@@ -11,7 +11,7 @@
     "splash": {
       "image": "./assets/splash-icon.png",
       "resizeMode": "contain",
-      "backgroundColor": "#0F0F0F"
+      "backgroundColor": "#F5F1E8"
     },
     "ios": {
       "supportsTablet": false,
@@ -23,9 +23,11 @@
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
-        "backgroundColor": "#0F0F0F"
+        "backgroundColor": "#F5F1E8"
       },
-      "permissions": ["RECORD_AUDIO"],
+      "permissions": [
+        "RECORD_AUDIO"
+      ],
       "package": "com.secondbrain.app",
       "edgeToEdgeEnabled": true
     },
@@ -38,7 +40,7 @@
         }
       ],
       [
-        "expo-av",
+        "expo-audio",
         {
           "microphonePermission": "Second Brain needs microphone access to record your voice journal entries."
         }

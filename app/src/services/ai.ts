@@ -90,28 +90,40 @@ export async function transcribeAudio(audioUri: string): Promise<TranscriptionRe
   }
 
   try {
-    // Fetch the audio file
-    const audioResponse = await fetch(audioUri);
-    const audioBlob = await audioResponse.blob();
+    console.log('🎙️ Starting transcription for:', audioUri);
 
-    // Create form data
+    // Create form data with React Native compatible file object
     const formData = new FormData();
-    formData.append('file', audioBlob, 'recording.m4a');
-    formData.append('model_id', 'scribe_v1');
 
+    // React Native requires this specific format for file uploads
+    formData.append('file', {
+      uri: audioUri,
+      type: 'audio/m4a',
+      name: 'recording.m4a',
+    } as any);
+    formData.append('model_id', 'scribe_v1');
+    formData.append('language_code', 'eng'); // Force English transcription
+
+    console.log('📤 Sending to ElevenLabs Scribe API...');
     const response = await fetch(`${ELEVENLABS_API_URL}/speech-to-text`, {
       method: 'POST',
       headers: {
         'xi-api-key': ELEVENLABS_API_KEY,
+        // Don't set Content-Type - fetch will set it automatically with boundary
       },
       body: formData,
     });
 
+    console.log('📡 Transcription response status:', response.status);
+
     if (!response.ok) {
+      const errorText = await response.text();
+      console.error('❌ Transcription error response:', errorText);
       throw new Error(`Transcription failed: ${response.status}`);
     }
 
     const result = await response.json();
+    console.log('✅ Transcription result:', result.text?.substring(0, 50));
 
     return {
       text: result.text || '',
@@ -135,6 +147,9 @@ export async function synthesizeSpeech(text: string): Promise<string | null> {
 
   try {
     console.log('🎤 Starting TTS for text:', text.substring(0, 50));
+    console.log('🔑 Using voice ID:', activeVoiceId);
+    console.log('🔑 API key present:', !!ELEVENLABS_API_KEY, 'length:', ELEVENLABS_API_KEY?.length);
+    console.log('🌐 TTS URL:', `${ELEVENLABS_API_URL}/text-to-speech/${activeVoiceId}`);
 
     // Create abort controller for timeout
     const controller = new AbortController();
@@ -154,7 +169,6 @@ export async function synthesizeSpeech(text: string): Promise<string | null> {
           voice_settings: {
             stability: 0.5,
             similarity_boost: 0.75,
-            style: 0.3,
           },
         }),
         signal: controller.signal,
@@ -165,8 +179,10 @@ export async function synthesizeSpeech(text: string): Promise<string | null> {
     console.log('📡 TTS response status:', response.status);
 
     if (!response.ok) {
+      const errorBody = await response.text();
       console.error('❌ TTS failed with status:', response.status);
-      throw new Error(`TTS failed: ${response.status}`);
+      console.error('❌ TTS error body:', errorBody);
+      throw new Error(`TTS failed: ${response.status} - ${errorBody}`);
     }
 
     // Convert to base64 data URI for React Native
@@ -192,25 +208,20 @@ export async function generateResponse(
   personalFacts: PersonalFact[],
   relevantMemories: MemoryNode[]
 ): Promise<AIResponse> {
-  console.log('🤖 generateResponse called');
-
   if (!GEMINI_API_KEY) {
     console.error('❌ No Gemini API key found');
     return { text: "I'm listening. What's on your mind?" };
   }
 
   try {
-    console.log('📝 Building prompt...');
     const systemPrompt = buildSystemPrompt(personalFacts, relevantMemories);
     const conversationHistory = formatConversationHistory(messages);
-
-    console.log('🌐 Calling Gemini API...');
 
     // Create abort controller for timeout
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
 
-    const response = await fetch(
+    const response = await fetchWithRetry(
       `${GEMINI_API_URL}/models/gemini-3-flash-preview:generateContent?key=${GEMINI_API_KEY}`,
       {
         method: 'POST',
@@ -224,7 +235,7 @@ export async function generateResponse(
           ],
           generationConfig: {
             temperature: 0.8,
-            maxOutputTokens: 300, // Keep responses concise
+            maxOutputTokens: 300,
             topP: 0.9,
           },
         }),
@@ -234,8 +245,6 @@ export async function generateResponse(
 
     clearTimeout(timeoutId);
 
-    console.log('📡 Gemini response status:', response.status);
-
     if (!response.ok) {
       const errorText = await response.text();
       console.error('❌ Gemini API error:', response.status, errorText);
@@ -243,15 +252,9 @@ export async function generateResponse(
     }
 
     const result = await response.json();
-    console.log('✅ Gemini response received:', JSON.stringify(result).substring(0, 200));
-
     const text = result.candidates?.[0]?.content?.parts?.[0]?.text || "What's on your mind?";
-    console.log('💬 Response text:', text.substring(0, 100));
 
-    // Generate speech
-    console.log('🎤 Generating speech...');
     const audioUri = await synthesizeSpeech(text);
-    console.log('🔊 Speech generated:', audioUri ? 'yes' : 'no');
 
     return { text, audioUri: audioUri || undefined };
   } catch (error) {
@@ -290,7 +293,7 @@ Extract the following as JSON (be specific and genuine, not generic):
 
 Focus on substance. If they just mentioned something in passing, don't include it. If they dwelled on something emotional, capture that. Return only valid JSON.`;
 
-    const response = await fetch(
+    const response = await fetchWithRetry(
       `${GEMINI_API_URL}/models/gemini-3-flash-preview:generateContent?key=${GEMINI_API_KEY}`,
       {
         method: 'POST',
@@ -396,7 +399,7 @@ Return JSON array of updates (or empty array if nothing new):
 
 Return only valid JSON array.`;
 
-    const response = await fetch(
+    const response = await fetchWithRetry(
       `${GEMINI_API_URL}/models/gemini-3-flash-preview:generateContent?key=${GEMINI_API_KEY}`,
       {
         method: 'POST',
@@ -488,7 +491,7 @@ async function generateEmbedding(text: string): Promise<number[] | undefined> {
   }
 
   try {
-    const response = await fetch(
+    const response = await fetchWithRetry(
       `${GEMINI_API_URL}/models/text-embedding-004:embedContent?key=${GEMINI_API_KEY}`,
       {
         method: 'POST',
@@ -511,14 +514,9 @@ async function generateEmbedding(text: string): Promise<number[] | undefined> {
   }
 }
 
-/**
- * Optimized cosine similarity using Float32Array
- * For 768-dim vectors, this runs in ~0.01ms per comparison
- */
 function cosineSimilarity(a: number[], b: number[]): number {
   if (a.length !== b.length) return 0;
 
-  // Use Float32Array for SIMD-like optimizations
   const vecA = new Float32Array(a);
   const vecB = new Float32Array(b);
 
@@ -526,19 +524,7 @@ function cosineSimilarity(a: number[], b: number[]): number {
   let normA = 0;
   let normB = 0;
 
-  // Unrolled loop for better performance
-  const len = vecA.length;
-  let i = 0;
-
-  // Process 4 elements at a time
-  for (; i <= len - 4; i += 4) {
-    dotProduct += vecA[i] * vecB[i] + vecA[i+1] * vecB[i+1] + vecA[i+2] * vecB[i+2] + vecA[i+3] * vecB[i+3];
-    normA += vecA[i] * vecA[i] + vecA[i+1] * vecA[i+1] + vecA[i+2] * vecA[i+2] + vecA[i+3] * vecA[i+3];
-    normB += vecB[i] * vecB[i] + vecB[i+1] * vecB[i+1] + vecB[i+2] * vecB[i+2] + vecB[i+3] * vecB[i+3];
-  }
-
-  // Handle remaining elements
-  for (; i < len; i++) {
+  for (let i = 0; i < vecA.length; i++) {
     dotProduct += vecA[i] * vecB[i];
     normA += vecA[i] * vecA[i];
     normB += vecB[i] * vecB[i];
@@ -550,11 +536,6 @@ function cosineSimilarity(a: number[], b: number[]): number {
 
 /**
  * Find relevant memories using semantic similarity
- *
- * Performance for 1000 memories:
- * - Embedding API call: ~100-200ms (network, unavoidable)
- * - Similarity computation: ~10ms (local)
- * - Total: ~110-210ms
  */
 export async function findRelevantMemories(
   currentContext: string,
@@ -605,6 +586,69 @@ export async function findRelevantMemories(
 // =============================================================================
 // Helper Functions
 // =============================================================================
+
+/**
+ * Helper to fetch with exponential backoff and 429 retry handling
+ */
+async function fetchWithRetry(
+  url: string,
+  options: RequestInit,
+  maxRetries = 3,
+  initialDelay = 2000
+): Promise<Response> {
+  let lastError: Error | null = null;
+  
+  for (let i = 0; i <= maxRetries; i++) {
+    try {
+      if (i > 0) {
+        const delay = initialDelay * Math.pow(2, i - 1);
+        await new Promise(resolve => setTimeout(resolve, delay));
+      }
+
+      const response = await fetch(url, options);
+
+      if (response.ok) {
+        return response;
+      }
+
+      if (response.status === 429) {
+        const errorData = await response.clone().json().catch(() => ({}));
+        let retryAfter = initialDelay;
+
+        const retryInfo = (errorData.error?.details as any[] | undefined)?.find(
+          (d) => d['@type'] === 'type.googleapis.com/google.rpc.RetryInfo'
+        );
+        
+        const retryDelay = retryInfo?.retryDelay as string | undefined;
+        
+        if (retryDelay) {
+          const seconds = parseFloat(retryDelay.replace('s', ''));
+          if (!isNaN(seconds)) {
+            retryAfter = seconds * 1000 + 500;
+          }
+        }
+
+        if (i < maxRetries) {
+          console.warn(`⚠️ Gemini Rate Limit (429). Retrying in ${retryAfter}ms...`);
+          await new Promise(resolve => setTimeout(resolve, retryAfter));
+          continue; 
+        }
+      }
+
+      if (response.status >= 500 && i < maxRetries) {
+        continue;
+      }
+
+      return response;
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error(String(error));
+      if (i < maxRetries) continue;
+      throw lastError;
+    }
+  }
+  
+  throw lastError || new Error('Max retries reached');
+}
 
 export function getGreeting(): string {
   const hour = new Date().getHours();

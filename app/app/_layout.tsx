@@ -1,3 +1,6 @@
+// Crypto polyfill must be imported first for uuid to work
+import '../src/polyfills/crypto';
+
 import { useEffect } from 'react';
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';

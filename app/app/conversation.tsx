@@ -5,7 +5,7 @@ import {
   StyleSheet,
   ScrollView,
   Pressable,
-  Alert,
+  Modal,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
@@ -28,11 +28,13 @@ type WaveformState = 'idle' | 'speaking' | 'processing' | 'aiSpeaking';
 export default function ConversationScreen() {
   const router = useRouter();
   const scrollViewRef = useRef<ScrollView>(null);
+  const [showShortSessionModal, setShowShortSessionModal] = useState(false);
   const {
     currentSession,
     conversationState,
     isRecording,
     messages,
+    audioLevel,
     startSession,
     startRecording,
     stopRecording,
@@ -49,12 +51,13 @@ export default function ConversationScreen() {
 
   // Start session when screen mounts
   useEffect(() => {
-    startSession();
-    // Auto-start recording after session starts
-    const timer = setTimeout(() => {
-      startRecording();
-    }, 500);
-    return () => clearTimeout(timer);
+    const initSession = async () => {
+      await startSession();
+      // Greeting audio has finished, now start recording
+      const started = await startRecording();
+      console.log('Recording started:', started);
+    };
+    initSession();
   }, []);
 
   // Auto-scroll to bottom when new messages arrive
@@ -74,28 +77,28 @@ export default function ConversationScreen() {
   const handleEndSession = useCallback(async () => {
     // Check if session is very short (less than 10 seconds worth of content)
     if (messages.length <= 1) {
-      Alert.alert(
-        'Short Session',
-        'Are you sure? Your session is very short.',
-        [
-          { text: 'Keep Talking', style: 'cancel' },
-          {
-            text: 'End Anyway',
-            style: 'destructive',
-            onPress: async () => {
-              await endSession();
-              haptics.sessionEnded();
-              router.replace('/processing');
-            },
-          },
-        ]
-      );
+      setShowShortSessionModal(true);
     } else {
-      await endSession();
-      haptics.sessionEnded();
+      try {
+        await endSession();
+        haptics.sessionEnded();
+      } catch (error) {
+        console.error('Error ending session:', error);
+      }
       router.replace('/processing');
     }
   }, [messages.length, endSession, router]);
+
+  const handleConfirmEndShortSession = useCallback(async () => {
+    setShowShortSessionModal(false);
+    try {
+      await endSession();
+      haptics.sessionEnded();
+    } catch (error) {
+      console.error('Error ending session:', error);
+    }
+    router.replace('/processing');
+  }, [endSession, router]);
 
   const handleDonePress = useCallback(() => {
     if (isRecording) {
@@ -115,14 +118,53 @@ export default function ConversationScreen() {
             onPress={handleDonePress}
             style={({ pressed }) => [
               styles.doneButton,
-              pressed && styles.pressed,
+              pressed && styles.doneButtonPressed,
             ]}
-            hitSlop={20}
+            hitSlop={12}
           >
             <Text style={styles.doneText}>Done</Text>
           </Pressable>
         </Animated.View>
       </SafeAreaView>
+
+      {/* Short Session Confirmation Modal */}
+      <Modal
+        visible={showShortSessionModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowShortSessionModal(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>Finish session?</Text>
+            <Text style={styles.modalMessage}>
+              You haven't said much yet. Want to keep going?
+            </Text>
+            <View style={styles.modalButtons}>
+              <Pressable
+                onPress={() => setShowShortSessionModal(false)}
+                style={({ pressed }) => [
+                  styles.modalButton,
+                  styles.modalButtonPrimary,
+                  pressed && styles.modalButtonPressed,
+                ]}
+              >
+                <Text style={styles.modalButtonTextPrimary}>Keep Talking</Text>
+              </Pressable>
+              <Pressable
+                onPress={handleConfirmEndShortSession}
+                style={({ pressed }) => [
+                  styles.modalButton,
+                  styles.modalButtonSecondary,
+                  pressed && styles.modalButtonPressed,
+                ]}
+              >
+                <Text style={styles.modalButtonTextSecondary}>End Session</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
 
       {/* Chat Transcript */}
       <ScrollView
@@ -166,16 +208,33 @@ export default function ConversationScreen() {
         )}
       </ScrollView>
 
-      {/* Waveform - Bottom third */}
+      {/* Waveform - Bottom third - Tap to send */}
       <Animated.View
         entering={SlideInDown.delay(300).springify()}
         style={styles.waveformContainer}
       >
-        <WaveformVisualizer
-          state={getWaveformState()}
-          barCount={12}
-          height={80}
-        />
+        <Pressable
+          onPress={() => {
+            if (isRecording) {
+              console.log('Stopping recording to send...');
+              stopRecording();
+            } else if (conversationState === 'idle') {
+              console.log('Starting recording...');
+              startRecording();
+            }
+          }}
+          style={styles.waveformTouchable}
+        >
+          <WaveformVisualizer
+            state={getWaveformState()}
+            particleCount={24}
+            size={120}
+            audioLevel={audioLevel}
+          />
+          <Text style={styles.waveformHint}>
+            {isRecording ? 'Tap to send' : conversationState === 'idle' ? 'Tap to speak' : ''}
+          </Text>
+        </Pressable>
       </Animated.View>
 
       <SafeAreaView edges={['bottom']} style={styles.bottomSafe} />
@@ -202,16 +261,78 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   doneButton: {
-    paddingVertical: spacing.xs,
-    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs + 2,
+    paddingHorizontal: spacing.md,
+    backgroundColor: colors.backgroundSecondary,
+    borderRadius: borderRadius.lg,
+  },
+  doneButtonPressed: {
+    backgroundColor: colors.primary,
   },
   doneText: {
     ...typography.body,
     color: colors.text,
-    fontWeight: '500',
+    fontWeight: '600',
   },
-  pressed: {
-    opacity: 0.6,
+  // Modal styles
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: colors.overlay,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: spacing.lg,
+  },
+  modalContent: {
+    backgroundColor: colors.background,
+    borderRadius: borderRadius.lg,
+    padding: spacing.xl,
+    width: '100%',
+    maxWidth: 320,
+    alignItems: 'center',
+  },
+  modalTitle: {
+    ...typography.title3,
+    color: colors.text,
+    marginBottom: spacing.sm,
+    textAlign: 'center',
+  },
+  modalMessage: {
+    ...typography.body,
+    color: colors.textSecondary,
+    textAlign: 'center',
+    marginBottom: spacing.xl,
+    lineHeight: 22,
+  },
+  modalButtons: {
+    width: '100%',
+    gap: spacing.sm,
+  },
+  modalButton: {
+    paddingVertical: spacing.sm + 2,
+    paddingHorizontal: spacing.lg,
+    borderRadius: borderRadius.md,
+    alignItems: 'center',
+  },
+  modalButtonPrimary: {
+    backgroundColor: colors.primary,
+  },
+  modalButtonSecondary: {
+    backgroundColor: 'transparent',
+    borderWidth: 1,
+    borderColor: colors.textSecondary,
+  },
+  modalButtonPressed: {
+    opacity: 0.8,
+  },
+  modalButtonTextPrimary: {
+    ...typography.body,
+    color: '#FFFFFF',
+    fontWeight: '600',
+  },
+  modalButtonTextSecondary: {
+    ...typography.body,
+    color: colors.textSecondary,
+    fontWeight: '500',
   },
   messagesContainer: {
     flex: 1,
@@ -246,6 +367,16 @@ const styles = StyleSheet.create({
   },
   waveformContainer: {
     paddingBottom: spacing.sm,
+  },
+  waveformTouchable: {
+    alignItems: 'center',
+    paddingVertical: spacing.md,
+  },
+  waveformHint: {
+    ...typography.caption,
+    color: colors.textSecondary,
+    opacity: 0.6,
+    marginTop: spacing.sm,
   },
   bottomSafe: {
     backgroundColor: colors.background,

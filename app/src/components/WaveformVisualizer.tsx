@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useMemo } from 'react';
 import { View, StyleSheet } from 'react-native';
 import Animated, {
   useSharedValue,
@@ -6,80 +6,195 @@ import Animated, {
   withRepeat,
   withSequence,
   withTiming,
+  withSpring,
   withDelay,
   Easing,
+  interpolate,
 } from 'react-native-reanimated';
-import { LinearGradient } from 'expo-linear-gradient';
 import { colors } from '../theme';
 
 type WaveformState = 'idle' | 'speaking' | 'processing' | 'aiSpeaking';
 
 interface WaveformVisualizerProps {
   state: WaveformState;
-  barCount?: number;
-  height?: number;
+  particleCount?: number;
+  size?: number;
+  audioLevel?: number;
 }
+
+// Warm gradient colors for particles
+const particleColors = [
+  colors.primary,      // Warm Orange #E88D67
+  colors.primaryLight, // Soft Peach #F4B59F
+  '#D4A574',           // Warm Tan
+  '#E8A87C',           // Peachy Orange
+  colors.primaryLight, // Soft Peach
+  colors.primary,      // Warm Orange
+];
 
 export function WaveformVisualizer({
   state,
-  barCount = 12,
-  height = 80,
+  particleCount = 24,
+  size = 120,
+  audioLevel = 0,
 }: WaveformVisualizerProps) {
-  const bars = Array(barCount).fill(0);
+  // Generate particles with random properties for organic feel
+  const particles = useMemo(() => {
+    return Array(particleCount).fill(0).map((_, i) => {
+      const angle = (i / particleCount) * Math.PI * 2;
+      const radiusVariation = 0.7 + Math.random() * 0.6;
+      return {
+        id: i,
+        angle,
+        baseRadius: radiusVariation,
+        size: 6 + Math.random() * 6, // 6-12px
+        color: particleColors[i % particleColors.length],
+        phaseOffset: Math.random() * Math.PI * 2,
+        speed: 0.8 + Math.random() * 0.4,
+      };
+    });
+  }, [particleCount]);
 
   return (
-    <View style={[styles.container, { height }]}>
-      <LinearGradient
-        colors={['transparent', colors.background]}
-        style={styles.gradientOverlay}
-      />
-      <View style={styles.barsContainer}>
-        {bars.map((_, index) => (
-          <WaveformBar
-            key={index}
-            index={index}
-            barCount={barCount}
-            state={state}
-            maxHeight={height * 0.7}
-          />
-        ))}
-      </View>
+    <View style={[styles.container, { width: size, height: size }]}>
+      {particles.map((particle) => (
+        <Particle
+          key={particle.id}
+          particle={particle}
+          state={state}
+          containerSize={size}
+          audioLevel={audioLevel}
+        />
+      ))}
     </View>
   );
 }
 
-interface WaveformBarProps {
-  index: number;
-  barCount: number;
+interface ParticleProps {
+  particle: {
+    id: number;
+    angle: number;
+    baseRadius: number;
+    size: number;
+    color: string;
+    phaseOffset: number;
+    speed: number;
+  };
   state: WaveformState;
-  maxHeight: number;
+  containerSize: number;
+  audioLevel: number;
 }
 
-function WaveformBar({ index, barCount, state, maxHeight }: WaveformBarProps) {
-  const heightValue = useSharedValue(8);
-  const opacity = useSharedValue(0.6);
+function Particle({ particle, state, containerSize, audioLevel }: ParticleProps) {
+  const translateX = useSharedValue(0);
+  const translateY = useSharedValue(0);
+  const scale = useSharedValue(1);
+  const opacity = useSharedValue(0.7);
 
-  const minHeight = 8;
-  const centerIndex = (barCount - 1) / 2;
-  const distanceFromCenter = Math.abs(index - centerIndex);
-  const baseHeight = maxHeight * (1 - (distanceFromCenter / centerIndex) * 0.5);
+  const centerOffset = containerSize / 2 - particle.size / 2;
+  const maxRadius = containerSize * 0.35;
+
+  // React to audio levels when speaking
+  useEffect(() => {
+    if (state === 'speaking') {
+      // Expand based on audio level with organic variation
+      const targetRadius = maxRadius * (0.3 + audioLevel * 0.7) * particle.baseRadius;
+      const wobble = Math.sin(Date.now() / 200 + particle.phaseOffset) * 5;
+
+      const targetX = Math.cos(particle.angle + wobble * 0.02) * targetRadius;
+      const targetY = Math.sin(particle.angle + wobble * 0.02) * targetRadius;
+
+      translateX.value = withSpring(targetX, {
+        damping: 15,
+        stiffness: 150,
+        mass: 0.5,
+      });
+      translateY.value = withSpring(targetY, {
+        damping: 15,
+        stiffness: 150,
+        mass: 0.5,
+      });
+
+      scale.value = withSpring(0.8 + audioLevel * 0.4, {
+        damping: 12,
+        stiffness: 180,
+      });
+
+      opacity.value = withTiming(0.6 + audioLevel * 0.4, { duration: 100 });
+    }
+  }, [audioLevel, state]);
 
   useEffect(() => {
-    const delay = index * 50;
+    const delay = particle.id * 30;
 
-    if (state === 'speaking') {
-      // Active dancing animation when user is speaking
-      const randomDuration = 300 + Math.random() * 200;
-      heightValue.value = withDelay(
+    if (state === 'idle') {
+      // Gentle breathing - particles float close together
+      const breathRadius = maxRadius * 0.15 * particle.baseRadius;
+      const duration = 3000 / particle.speed;
+
+      translateX.value = withDelay(
         delay,
         withRepeat(
           withSequence(
-            withTiming(baseHeight * (0.5 + Math.random() * 0.5), {
-              duration: randomDuration,
+            withTiming(Math.cos(particle.angle) * breathRadius, {
+              duration,
+              easing: Easing.inOut(Easing.sin),
+            }),
+            withTiming(Math.cos(particle.angle + 0.3) * breathRadius * 0.8, {
+              duration,
+              easing: Easing.inOut(Easing.sin),
+            })
+          ),
+          -1,
+          true
+        )
+      );
+
+      translateY.value = withDelay(
+        delay,
+        withRepeat(
+          withSequence(
+            withTiming(Math.sin(particle.angle) * breathRadius, {
+              duration,
+              easing: Easing.inOut(Easing.sin),
+            }),
+            withTiming(Math.sin(particle.angle + 0.3) * breathRadius * 0.8, {
+              duration,
+              easing: Easing.inOut(Easing.sin),
+            })
+          ),
+          -1,
+          true
+        )
+      );
+
+      scale.value = withRepeat(
+        withSequence(
+          withTiming(0.9, { duration: duration * 0.8, easing: Easing.inOut(Easing.sin) }),
+          withTiming(1.1, { duration: duration * 0.8, easing: Easing.inOut(Easing.sin) })
+        ),
+        -1,
+        true
+      );
+
+      opacity.value = withTiming(0.5, { duration: 400 });
+    } else if (state === 'speaking') {
+      // Initial state for speaking - will be updated by audioLevel
+      opacity.value = withTiming(0.8, { duration: 200 });
+    } else if (state === 'processing') {
+      // Pulsing inward/outward - thinking state
+      const pulseRadius = maxRadius * 0.25 * particle.baseRadius;
+
+      translateX.value = withDelay(
+        delay,
+        withRepeat(
+          withSequence(
+            withTiming(Math.cos(particle.angle) * pulseRadius * 1.2, {
+              duration: 800,
               easing: Easing.inOut(Easing.ease),
             }),
-            withTiming(minHeight + Math.random() * (baseHeight * 0.3), {
-              duration: randomDuration * 0.8,
+            withTiming(Math.cos(particle.angle) * pulseRadius * 0.5, {
+              duration: 800,
               easing: Easing.inOut(Easing.ease),
             })
           ),
@@ -87,108 +202,130 @@ function WaveformBar({ index, barCount, state, maxHeight }: WaveformBarProps) {
           true
         )
       );
-      opacity.value = withTiming(1, { duration: 200 });
-    } else if (state === 'processing') {
-      // Pulsing glow effect when AI is processing
-      heightValue.value = withDelay(
+
+      translateY.value = withDelay(
         delay,
         withRepeat(
           withSequence(
-            withTiming(baseHeight * 0.4, { duration: 600, easing: Easing.inOut(Easing.ease) }),
-            withTiming(baseHeight * 0.2, { duration: 600, easing: Easing.inOut(Easing.ease) })
+            withTiming(Math.sin(particle.angle) * pulseRadius * 1.2, {
+              duration: 800,
+              easing: Easing.inOut(Easing.ease),
+            }),
+            withTiming(Math.sin(particle.angle) * pulseRadius * 0.5, {
+              duration: 800,
+              easing: Easing.inOut(Easing.ease),
+            })
           ),
           -1,
           true
         )
       );
+
       opacity.value = withRepeat(
         withSequence(
-          withTiming(0.8, { duration: 600 }),
-          withTiming(0.4, { duration: 600 })
+          withTiming(0.8, { duration: 800 }),
+          withTiming(0.4, { duration: 800 })
+        ),
+        -1,
+        true
+      );
+
+      scale.value = withRepeat(
+        withSequence(
+          withTiming(1.1, { duration: 800, easing: Easing.inOut(Easing.ease) }),
+          withTiming(0.85, { duration: 800, easing: Easing.inOut(Easing.ease) })
         ),
         -1,
         true
       );
     } else if (state === 'aiSpeaking') {
-      // Smooth wave animation when AI is speaking
-      const waveDuration = 400;
-      const phaseOffset = (index / barCount) * Math.PI * 2;
-      heightValue.value = withDelay(
+      // Flowing wave pattern - AI responding
+      const waveRadius = maxRadius * 0.4 * particle.baseRadius;
+      const waveDuration = 600 / particle.speed;
+
+      translateX.value = withDelay(
         delay,
         withRepeat(
           withSequence(
-            withTiming(baseHeight * (0.4 + Math.sin(phaseOffset) * 0.3), {
+            withTiming(Math.cos(particle.angle + particle.phaseOffset) * waveRadius, {
               duration: waveDuration,
-              easing: Easing.inOut(Easing.sine),
+              easing: Easing.inOut(Easing.sin),
             }),
-            withTiming(baseHeight * (0.6 + Math.cos(phaseOffset) * 0.3), {
+            withTiming(Math.cos(particle.angle + particle.phaseOffset + 0.5) * waveRadius * 1.2, {
               duration: waveDuration,
-              easing: Easing.inOut(Easing.sine),
+              easing: Easing.inOut(Easing.sin),
             })
           ),
           -1,
           true
         )
       );
-      opacity.value = withTiming(0.9, { duration: 200 });
-    } else {
-      // Gentle idle pulse
-      heightValue.value = withRepeat(
+
+      translateY.value = withDelay(
+        delay,
+        withRepeat(
+          withSequence(
+            withTiming(Math.sin(particle.angle + particle.phaseOffset) * waveRadius, {
+              duration: waveDuration,
+              easing: Easing.inOut(Easing.sin),
+            }),
+            withTiming(Math.sin(particle.angle + particle.phaseOffset + 0.5) * waveRadius * 1.2, {
+              duration: waveDuration,
+              easing: Easing.inOut(Easing.sin),
+            })
+          ),
+          -1,
+          true
+        )
+      );
+
+      opacity.value = withTiming(0.85, { duration: 200 });
+
+      scale.value = withRepeat(
         withSequence(
-          withTiming(minHeight + 4, { duration: 1500, easing: Easing.inOut(Easing.ease) }),
-          withTiming(minHeight, { duration: 1500, easing: Easing.inOut(Easing.ease) })
+          withTiming(1.15, { duration: waveDuration, easing: Easing.inOut(Easing.sin) }),
+          withTiming(0.9, { duration: waveDuration, easing: Easing.inOut(Easing.sin) })
         ),
         -1,
         true
       );
-      opacity.value = withTiming(0.5, { duration: 300 });
     }
-  }, [state, index]);
+  }, [state]);
 
   const animatedStyle = useAnimatedStyle(() => ({
-    height: heightValue.value,
+    transform: [
+      { translateX: translateX.value },
+      { translateY: translateY.value },
+      { scale: scale.value },
+    ],
     opacity: opacity.value,
   }));
 
   return (
-    <Animated.View style={[styles.bar, animatedStyle]}>
-      <LinearGradient
-        colors={[colors.primary, colors.primaryLight]}
-        start={{ x: 0, y: 0 }}
-        end={{ x: 0, y: 1 }}
-        style={styles.barGradient}
-      />
-    </Animated.View>
+    <Animated.View
+      style={[
+        styles.particle,
+        {
+          width: particle.size,
+          height: particle.size,
+          borderRadius: particle.size / 2,
+          backgroundColor: particle.color,
+          left: centerOffset,
+          top: centerOffset,
+        },
+        animatedStyle,
+      ]}
+    />
   );
 }
 
 const styles = StyleSheet.create({
   container: {
-    width: '100%',
     position: 'relative',
     justifyContent: 'center',
-  },
-  gradientOverlay: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    height: 20,
-    zIndex: 1,
-  },
-  barsContainer: {
-    flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
-    gap: 4,
-    paddingHorizontal: 20,
   },
-  bar: {
-    width: 6,
-    borderRadius: 3,
-    overflow: 'hidden',
-  },
-  barGradient: {
-    flex: 1,
+  particle: {
+    position: 'absolute',
   },
 });

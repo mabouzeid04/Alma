@@ -180,7 +180,7 @@ const styles = StyleSheet.create({
     ...typography.caption,
     color: colors.textSecondary,
     opacity: 0.5,
-    marginTop: spacing.md, // 16px below orb
+    marginTop: spacing.xxxl, // 40px below orb to clear the glow ring
   },
   metadataContainer: {
     paddingBottom: spacing.md,

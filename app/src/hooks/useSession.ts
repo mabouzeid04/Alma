@@ -11,6 +11,7 @@ export function useSession() {
   const [conversationState, setConversationState] = useState<ConversationState>('idle');
   const [isRecording, setIsRecording] = useState(false);
   const [messages, setMessages] = useState<Message[]>([]);
+  const [audioLevel, setAudioLevel] = useState(0);
   const sessionStartTime = useRef<Date | null>(null);
 
   // Cache for memory retrieval (avoid re-fetching on every message)
@@ -53,8 +54,12 @@ export function useSession() {
     // Save session to database
     await database.createSession(session);
 
-    // Add initial AI greeting
+    // Add initial AI greeting with TTS
     const greeting = ai.getGreeting();
+
+    // Generate speech for greeting (don't await to avoid blocking)
+    const greetingAudioPromise = ai.synthesizeSpeech(greeting);
+
     const aiMessage: Message = {
       id: uuid(),
       content: greeting,
@@ -67,6 +72,19 @@ export function useSession() {
 
     haptics.success();
 
+    // Play greeting audio and wait for it to finish before returning
+    // This ensures recording doesn't start until greeting is done
+    try {
+      const audioUri = await greetingAudioPromise;
+      if (audioUri) {
+        console.log('Playing greeting audio...');
+        await audio.playAudio(audioUri);
+        console.log('Greeting audio finished, ready for recording');
+      }
+    } catch (error) {
+      console.warn('Failed to play greeting audio:', error);
+    }
+
     return session;
   }, []);
 
@@ -74,7 +92,9 @@ export function useSession() {
   const startRecording = useCallback(async () => {
     if (!currentSession) return false;
 
-    const started = await audio.startRecording();
+    const started = await audio.startRecording((level) => {
+      setAudioLevel(level);
+    });
     if (started) {
       setIsRecording(true);
       setConversationState('listening');
@@ -151,6 +171,13 @@ export function useSession() {
       console.log('✅ AI message saved');
 
       haptics.aiResponse();
+
+      // Play AI response audio
+      if (response.audioUri) {
+        console.log('🔊 Playing AI response audio...');
+        await audio.playAudio(response.audioUri);
+        console.log('✅ AI response audio finished');
+      }
     }
 
     setConversationState('idle');
@@ -242,6 +269,7 @@ export function useSession() {
     conversationState,
     isRecording,
     messages,
+    audioLevel,
     startSession,
     startRecording,
     stopRecording,

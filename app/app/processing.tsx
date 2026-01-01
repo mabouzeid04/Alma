@@ -41,8 +41,8 @@ export default function ProcessingScreen() {
     // Subtle morphing effect
     morphX.value = withRepeat(
       withSequence(
-        withTiming(1.05, { duration: 2000, easing: Easing.inOut(Easing.sine) }),
-        withTiming(0.98, { duration: 2000, easing: Easing.inOut(Easing.sine) })
+        withTiming(1.05, { duration: 2000, easing: Easing.inOut(Easing.sin) }),
+        withTiming(0.98, { duration: 2000, easing: Easing.inOut(Easing.sin) })
       ),
       -1,
       true
@@ -50,8 +50,8 @@ export default function ProcessingScreen() {
 
     morphY.value = withRepeat(
       withSequence(
-        withTiming(0.98, { duration: 2000, easing: Easing.inOut(Easing.sine) }),
-        withTiming(1.05, { duration: 2000, easing: Easing.inOut(Easing.sine) })
+        withTiming(0.98, { duration: 2000, easing: Easing.inOut(Easing.sin) }),
+        withTiming(1.05, { duration: 2000, easing: Easing.inOut(Easing.sin) })
       ),
       -1,
       true

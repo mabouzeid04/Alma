@@ -1,8 +1,20 @@
-import { Audio } from 'expo-av';
+import { 
+  AudioModule,
+  createAudioPlayer, 
+  requestRecordingPermissionsAsync,
+  setAudioModeAsync,
+  RecordingPresets,
+  type AudioPlayer,
+  type AudioRecorder
+} from 'expo-audio';
 import { Platform } from 'react-native';
+import { File, Paths } from 'expo-file-system';
 
-let recording: Audio.Recording | null = null;
-let sound: Audio.Sound | null = null;
+let recorder: AudioRecorder | null = null;
+let player: AudioPlayer | null = null;
+let tempFileCounter = 0;
+let meteringInterval: ReturnType<typeof setInterval> | null = null;
+let meteringCallback: ((level: number) => void) | null = null;
 
 export interface AudioRecordingResult {
   uri: string;
@@ -10,21 +22,18 @@ export interface AudioRecordingResult {
 }
 
 export async function requestPermissions(): Promise<boolean> {
-  const { status } = await Audio.requestPermissionsAsync();
-  return status === 'granted';
+  const { granted } = await requestRecordingPermissionsAsync();
+  return granted;
 }
 
 export async function setupAudioMode(): Promise<void> {
-  await Audio.setAudioModeAsync({
-    allowsRecordingIOS: true,
-    playsInSilentModeIOS: true,
-    staysActiveInBackground: false,
-    shouldDuckAndroid: true,
-    playThroughEarpieceAndroid: false,
+  await setAudioModeAsync({
+    allowsRecording: true,
+    playsInSilentMode: true,
   });
 }
 
-export async function startRecording(): Promise<boolean> {
+export async function startRecording(onMeteringUpdate?: (level: number) => void): Promise<boolean> {
   try {
     const hasPermission = await requestPermissions();
     if (!hasPermission) {
@@ -35,42 +44,38 @@ export async function startRecording(): Promise<boolean> {
     await setupAudioMode();
 
     // Stop any existing recording
-    if (recording) {
+    if (recorder) {
       await stopRecording();
     }
 
-    const { recording: newRecording } = await Audio.Recording.createAsync(
-      {
-        ...Audio.RecordingOptionsPresets.HIGH_QUALITY,
-        android: {
-          extension: '.m4a',
-          outputFormat: Audio.AndroidOutputFormat.MPEG_4,
-          audioEncoder: Audio.AndroidAudioEncoder.AAC,
-          sampleRate: 44100,
-          numberOfChannels: 1,
-          bitRate: 128000,
-        },
-        ios: {
-          extension: '.m4a',
-          outputFormat: Audio.IOSOutputFormat.MPEG4AAC,
-          audioQuality: Audio.IOSAudioQuality.MAX,
-          sampleRate: 44100,
-          numberOfChannels: 1,
-          bitRate: 128000,
-          linearPCMBitDepth: 16,
-          linearPCMIsBigEndian: false,
-          linearPCMIsFloat: false,
-        },
-        web: {
-          mimeType: 'audio/webm',
-          bitsPerSecond: 128000,
-        },
-      },
-      undefined,
-      100 // Status update interval in ms
-    );
+    // Store the metering callback
+    meteringCallback = onMeteringUpdate || null;
 
-    recording = newRecording;
+    // Create recorder with high-quality settings
+    const recordingOptions = {
+      ...RecordingPresets.HIGH_QUALITY,
+      numberOfChannels: 1, // Override to mono for voice recording
+    };
+    recorder = new AudioModule.AudioRecorder(recordingOptions);
+
+    // Prepare and start recording
+    await recorder.prepareToRecordAsync();
+    await recorder.record();
+
+    // Start polling for metering if callback provided
+    if (meteringCallback) {
+      meteringInterval = setInterval(() => {
+        if (recorder) {
+          const status = recorder.getStatus();
+          if (status.isRecording && status.metering !== undefined) {
+            // Convert dB (typically -160 to 0) to 0-1 range
+            const normalizedLevel = Math.max(0, Math.min(1, (status.metering + 60) / 60));
+            meteringCallback!(normalizedLevel);
+          }
+        }
+      }, 100); // Poll every 100ms
+    }
+
     return true;
   } catch (error) {
     console.error('Failed to start recording:', error);
@@ -79,76 +84,160 @@ export async function startRecording(): Promise<boolean> {
 }
 
 export async function stopRecording(): Promise<AudioRecordingResult | null> {
-  if (!recording) {
+  if (!recorder) {
     return null;
   }
 
   try {
-    await recording.stopAndUnloadAsync();
-    const uri = recording.getURI();
-    const status = await recording.getStatusAsync();
-    recording = null;
+    // Clear metering interval
+    if (meteringInterval) {
+      clearInterval(meteringInterval);
+      meteringInterval = null;
+    }
+
+    const statusBefore = recorder.getStatus();
+    await recorder.stop();
+    const statusAfter = recorder.getStatus();
+    const uri = statusAfter.url;
+    recorder = null;
 
     // Reset audio mode for playback
-    await Audio.setAudioModeAsync({
-      allowsRecordingIOS: false,
-      playsInSilentModeIOS: true,
+    await setAudioModeAsync({
+      allowsRecording: false,
+      playsInSilentMode: true,
     });
 
     if (!uri) return null;
 
     return {
       uri,
-      duration: status.durationMillis ? status.durationMillis / 1000 : 0,
+      duration: statusBefore.durationMillis ? statusBefore.durationMillis / 1000 : 0,
     };
   } catch (error) {
     console.error('Failed to stop recording:', error);
-    recording = null;
+    recorder = null;
+    if (meteringInterval) {
+      clearInterval(meteringInterval);
+      meteringInterval = null;
+    }
     return null;
   }
 }
 
 export async function pauseRecording(): Promise<void> {
-  if (recording) {
-    await recording.pauseAsync();
+  if (recorder) {
+    await recorder.pause();
+    // Pause metering polling
+    if (meteringInterval) {
+      clearInterval(meteringInterval);
+      meteringInterval = null;
+    }
   }
 }
 
 export async function resumeRecording(): Promise<void> {
-  if (recording) {
-    await recording.startAsync();
+  if (recorder) {
+    await recorder.record();
+    // Resume metering polling if callback exists
+    if (meteringCallback) {
+      meteringInterval = setInterval(() => {
+        if (recorder) {
+          const status = recorder.getStatus();
+          if (status.isRecording && status.metering !== undefined) {
+            const normalizedLevel = Math.max(0, Math.min(1, (status.metering + 60) / 60));
+            meteringCallback!(normalizedLevel);
+          }
+        }
+      }, 100);
+    }
   }
 }
 
-export async function getRecordingStatus(): Promise<Audio.RecordingStatus | null> {
-  if (!recording) return null;
-  return await recording.getStatusAsync();
+export async function getRecordingStatus(): Promise<any> {
+  if (!recorder) return null;
+  return recorder.getStatus();
 }
 
 export async function playAudio(uri: string): Promise<void> {
   try {
-    if (sound) {
-      await sound.unloadAsync();
+    // Stop any currently playing audio
+    if (player) {
+      player.release();
+      player = null;
     }
 
-    const { sound: newSound } = await Audio.Sound.createAsync(
-      { uri },
-      { shouldPlay: true }
-    );
-    sound = newSound;
+    // Setup audio mode for playback
+    await setAudioModeAsync({
+      allowsRecording: false,
+      playsInSilentMode: true,
+    });
+
+    let audioUri = uri;
+
+    // Handle base64 data URIs by writing to a temp file
+    if (uri.startsWith('data:')) {
+      console.log('Converting base64 audio to file...');
+      const base64Data = uri.split(',')[1];
+      const tempFileName = `temp_audio_${tempFileCounter++}.mp3`;
+
+      // Use new expo-file-system API
+      const tempFile = new File(Paths.cache, tempFileName);
+
+      // Convert base64 to Uint8Array and write
+      const binaryString = atob(base64Data);
+      const bytes = new Uint8Array(binaryString.length);
+      for (let i = 0; i < binaryString.length; i++) {
+        bytes[i] = binaryString.charCodeAt(i);
+      }
+      await tempFile.write(bytes);
+
+      audioUri = tempFile.uri;
+      console.log('Audio file written to:', audioUri);
+    }
+
+    console.log('Creating player from:', audioUri.substring(0, 50));
+    player = createAudioPlayer({ uri: audioUri });
+    
+    // Wait for playback to complete
+    return new Promise((resolve) => {
+      player!.play();
+      
+      // Poll playback status by checking the playing property
+      const statusInterval = setInterval(() => {
+        if (!player) {
+          clearInterval(statusInterval);
+          resolve();
+          return;
+        }
+        
+        // Check if player has finished (no longer playing and has duration)
+        if (!player.playing && player.currentTime > 0) {
+          console.log('Audio playback finished');
+          clearInterval(statusInterval);
+          resolve();
+        }
+      }, 100);
+      
+      // Set timeout to avoid infinite waiting
+      setTimeout(() => {
+        if (statusInterval) {
+          clearInterval(statusInterval);
+        }
+        resolve();
+      }, 60000); // 60 second max
+    });
   } catch (error) {
     console.error('Failed to play audio:', error);
   }
 }
 
 export async function stopPlayback(): Promise<void> {
-  if (sound) {
-    await sound.stopAsync();
-    await sound.unloadAsync();
-    sound = null;
+  if (player) {
+    player.release();
+    player = null;
   }
 }
 
 export function isRecording(): boolean {
-  return recording !== null;
+  return recorder !== null;
 }
