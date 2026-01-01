@@ -1,5 +1,5 @@
 import * as SQLite from 'expo-sqlite';
-import { JournalSession, MemoryNode, PersonalFact, Message } from '../types';
+import { JournalSession, MemoryNode, MemoryVector, PersonalFact, Message } from '../types';
 
 const DATABASE_NAME = 'secondbrain.db';
 
@@ -61,10 +61,21 @@ async function initializeTables(): Promise<void> {
       is_active INTEGER DEFAULT 1
     );
 
+    CREATE TABLE IF NOT EXISTS memory_vectors (
+      id TEXT PRIMARY KEY,
+      session_id TEXT NOT NULL,
+      type TEXT NOT NULL,
+      text TEXT NOT NULL,
+      embedding TEXT,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (session_id) REFERENCES sessions (id) ON DELETE CASCADE
+    );
+
     CREATE INDEX IF NOT EXISTS idx_messages_session ON messages (session_id);
     CREATE INDEX IF NOT EXISTS idx_memory_nodes_session ON memory_nodes (session_id);
     CREATE INDEX IF NOT EXISTS idx_personal_facts_category ON personal_facts (category);
     CREATE INDEX IF NOT EXISTS idx_sessions_started_at ON sessions (started_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_memory_vectors_session ON memory_vectors (session_id);
   `);
 }
 
@@ -235,6 +246,49 @@ export async function getMemoryNodeForSession(
     unresolvedQuestions: JSON.parse(row.unresolved_questions),
     embedding: row.embedding ? JSON.parse(row.embedding) : undefined,
   };
+}
+
+// Memory vector operations
+
+export async function deleteMemoryVectorsForSession(sessionId: string): Promise<void> {
+  const database = await getDatabase();
+  await database.runAsync(`DELETE FROM memory_vectors WHERE session_id = ?`, [sessionId]);
+}
+
+export async function saveMemoryVectors(vectors: MemoryVector[]): Promise<void> {
+  if (vectors.length === 0) return;
+  const database = await getDatabase();
+  const insertStmt = `INSERT OR REPLACE INTO memory_vectors
+    (id, session_id, type, text, embedding, created_at)
+    VALUES (?, ?, ?, ?, ?, ?)`;
+
+  for (const vector of vectors) {
+    await database.runAsync(insertStmt, [
+      vector.id,
+      vector.sessionId,
+      vector.type,
+      vector.text,
+      vector.embedding ? JSON.stringify(vector.embedding) : null,
+      vector.createdAt.toISOString(),
+    ]);
+  }
+}
+
+export async function getMemoryVectorsForSession(sessionId: string): Promise<MemoryVector[]> {
+  const database = await getDatabase();
+  const rows = await database.getAllAsync<any>(
+    `SELECT * FROM memory_vectors WHERE session_id = ? ORDER BY created_at DESC`,
+    [sessionId]
+  );
+
+  return rows.map((row) => ({
+    id: row.id,
+    sessionId: row.session_id,
+    type: row.type,
+    text: row.text,
+    embedding: row.embedding ? JSON.parse(row.embedding) : undefined,
+    createdAt: new Date(row.created_at),
+  }));
 }
 
 // Personal facts operations

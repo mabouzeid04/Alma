@@ -7,10 +7,10 @@
  * 3. Session Memory Nodes (structured summaries per session)
  * 4. Vector Embeddings (semantic search)
  *
- * Uses ElevenLabs for voice (REST API) and Gemini for AI.
+ * Uses ElevenLabs for voice (REST API) and supports Gemini, Grok, and GPT.
  */
 
-import { Message, MemoryNode, PersonalFact, JournalSession } from '../types';
+import { Message, MemoryNode, MemoryVector, PersonalFact, JournalSession } from '../types';
 import { v4 as uuid } from 'uuid';
 
 // =============================================================================
@@ -19,10 +19,37 @@ import { v4 as uuid } from 'uuid';
 
 const ELEVENLABS_API_KEY = process.env.EXPO_PUBLIC_ELEVENLABS_API_KEY || '';
 const GEMINI_API_KEY = process.env.EXPO_PUBLIC_GEMINI_API_KEY || '';
+const OPENAI_API_KEY = process.env.EXPO_PUBLIC_OPENAI_API_KEY || '';
+const XAI_API_KEY = process.env.EXPO_PUBLIC_XAI_API_KEY || '';
 const ELEVENLABS_VOICE_ID = process.env.EXPO_PUBLIC_ELEVENLABS_VOICE_ID || 'EXAVITQu4vr4xnSDxMaL'; // Sarah - warm, friendly
 
 const ELEVENLABS_API_URL = 'https://api.elevenlabs.io/v1';
 const GEMINI_API_URL = 'https://generativelanguage.googleapis.com/v1beta';
+const OPENAI_API_URL = 'https://api.openai.com/v1';
+const XAI_API_URL = 'https://api.x.ai/v1';
+
+const DEFAULT_MODELS = {
+  gemini: process.env.EXPO_PUBLIC_GEMINI_MODEL || 'gemini-3-flash-preview',
+  openai: process.env.EXPO_PUBLIC_OPENAI_MODEL || 'gpt-5-mini',
+  xai: process.env.EXPO_PUBLIC_XAI_MODEL || 'grok-4.1-fast',
+};
+
+const MEMORY_MODEL_PROVIDER = process.env.EXPO_PUBLIC_MEMORY_MODEL_PROVIDER as ModelProvider | undefined;
+const MEMORY_MODEL = process.env.EXPO_PUBLIC_MEMORY_MODEL;
+const KNOWLEDGE_MODEL_PROVIDER = process.env.EXPO_PUBLIC_KNOWLEDGE_MODEL_PROVIDER as ModelProvider | undefined;
+const KNOWLEDGE_MODEL = process.env.EXPO_PUBLIC_KNOWLEDGE_MODEL;
+const EMBEDDING_MODEL_PROVIDER = process.env.EXPO_PUBLIC_EMBEDDING_MODEL_PROVIDER as ModelProvider | undefined;
+const EMBEDDING_MODEL = process.env.EXPO_PUBLIC_EMBEDDING_MODEL;
+const MEMORY_SIMILARITY_WEIGHT = 0.7;
+const MEMORY_RECENCY_WEIGHT = 0.3;
+const MEMORY_RECENCY_HALF_LIFE_DAYS = 60;
+
+type ModelProvider = 'gemini' | 'openai' | 'xai';
+
+interface ModelPreference {
+  provider: ModelProvider;
+  model: string;
+}
 
 // =============================================================================
 // Types
@@ -31,6 +58,9 @@ const GEMINI_API_URL = 'https://generativelanguage.googleapis.com/v1beta';
 export interface AIConfig {
   elevenLabsApiKey?: string;
   geminiApiKey?: string;
+  openAiApiKey?: string;
+  xaiApiKey?: string;
+  preferredModel?: Partial<ModelPreference>;
   voiceId?: string;
 }
 
@@ -43,6 +73,8 @@ export interface AIResponse {
   text: string;
   audioUri?: string;
 }
+
+type ChatMessage = { role: 'system' | 'user' | 'assistant'; content: string };
 
 interface PersonalFactUpdate {
   action: 'add' | 'update' | 'deactivate';
@@ -59,6 +91,13 @@ interface PersonalFactUpdate {
 
 let isInitialized = false;
 let activeVoiceId = ELEVENLABS_VOICE_ID;
+let activeGeminiApiKey = GEMINI_API_KEY;
+let activeOpenAiApiKey = OPENAI_API_KEY;
+let activeXaiApiKey = XAI_API_KEY;
+let preferredModel: Partial<ModelPreference> = {
+  provider: process.env.EXPO_PUBLIC_PRIMARY_MODEL_PROVIDER as ModelProvider | undefined,
+  model: process.env.EXPO_PUBLIC_PRIMARY_MODEL || process.env.EXPO_PUBLIC_AI_MODEL,
+};
 
 // =============================================================================
 // Initialization
@@ -69,11 +108,37 @@ export async function initializeAI(config?: AIConfig): Promise<void> {
     activeVoiceId = config.voiceId;
   }
 
+  if (config?.geminiApiKey) {
+    activeGeminiApiKey = config.geminiApiKey;
+  }
+
+  if (config?.openAiApiKey) {
+    activeOpenAiApiKey = config.openAiApiKey;
+  }
+
+  if (config?.xaiApiKey) {
+    activeXaiApiKey = config.xaiApiKey;
+  }
+
+  if (config?.preferredModel) {
+    preferredModel = { ...preferredModel, ...config.preferredModel };
+  }
+
   const hasElevenLabs = !!(config?.elevenLabsApiKey || ELEVENLABS_API_KEY);
   const hasGemini = !!(config?.geminiApiKey || GEMINI_API_KEY);
+  const hasOpenAi = !!(config?.openAiApiKey || OPENAI_API_KEY);
+  const hasXai = !!(config?.xaiApiKey || XAI_API_KEY);
 
   if (!hasElevenLabs || !hasGemini) {
     console.warn('⚠️ Missing API keys. Set EXPO_PUBLIC_ELEVENLABS_API_KEY and EXPO_PUBLIC_GEMINI_API_KEY');
+  }
+
+  if (!hasOpenAi) {
+    console.warn('ℹ️ OpenAI key missing. Set EXPO_PUBLIC_OPENAI_API_KEY to enable GPT models.');
+  }
+
+  if (!hasXai) {
+    console.warn('ℹ️ xAI key missing. Set EXPO_PUBLIC_XAI_API_KEY to enable Grok models.');
   }
 
   isInitialized = true;
@@ -200,65 +265,273 @@ export async function synthesizeSpeech(text: string): Promise<string | null> {
 }
 
 // =============================================================================
-// Conversation Response (Gemini)
+// Conversation Response (Multi-provider)
 // =============================================================================
+
+function createTimeoutController(timeoutMs = 10000) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  return { controller, timeoutId };
+}
+
+function inferProviderFromModelName(model?: string): ModelProvider {
+  const normalized = (model || '').toLowerCase();
+  if (normalized.includes('grok') || normalized.includes('xai')) return 'xai';
+  if (normalized.includes('gpt') || normalized.includes('openai') || normalized.includes('o1') || normalized.includes('5'))
+    return 'openai';
+  return 'gemini';
+}
+
+function resolveModelPreference(overrides?: Partial<ModelPreference>): ModelPreference {
+  const merged: Partial<ModelPreference> = {
+    ...preferredModel,
+    ...overrides,
+  };
+
+  const provider = merged.provider || inferProviderFromModelName(merged.model);
+  const model =
+    merged.model ||
+    (provider === 'openai'
+      ? DEFAULT_MODELS.openai
+      : provider === 'xai'
+      ? DEFAULT_MODELS.xai
+      : DEFAULT_MODELS.gemini);
+
+  const resolvedProvider = provider || inferProviderFromModelName(model);
+
+  return {
+    provider: resolvedProvider,
+    model,
+  };
+}
+
+function buildChatMessages(systemPrompt: string, messages: Message[]): ChatMessage[] {
+  const recentMessages: ChatMessage[] = messages.slice(-10).map((msg) => ({
+    role: msg.isUser ? ('user' as const) : ('assistant' as const),
+    content: msg.content,
+  }));
+
+  return [{ role: 'system' as const, content: systemPrompt }, ...recentMessages];
+}
+
+async function runPromptWithModel(
+  prompt: string,
+  modelPref: ModelPreference,
+  signal?: AbortSignal,
+  options?: { temperature?: number; maxTokens?: number; topP?: number }
+): Promise<string> {
+  const chatMessages: ChatMessage[] = [
+    { role: 'system', content: 'You are a careful, structured analyst. Return only the requested output.' },
+    { role: 'user', content: prompt },
+  ];
+
+  if (modelPref.provider === 'openai') {
+    return generateWithOpenAI(chatMessages, modelPref.model, signal, {
+      temperature: options?.temperature,
+      maxTokens: options?.maxTokens,
+    });
+  }
+
+  if (modelPref.provider === 'xai') {
+    return generateWithXAI(chatMessages, modelPref.model, signal, {
+      temperature: options?.temperature,
+      maxTokens: options?.maxTokens,
+    });
+  }
+
+  // Gemini path uses existing function; systemPrompt is unused here so pass empty
+  return generateWithGemini('', prompt, modelPref.model, signal, {
+    temperature: options?.temperature,
+    maxTokens: options?.maxTokens,
+    topP: options?.topP,
+  });
+}
+
+async function generateWithGemini(
+  systemPrompt: string,
+  conversationHistory: string,
+  modelId: string,
+  signal?: AbortSignal,
+  options?: { temperature?: number; maxTokens?: number; topP?: number }
+): Promise<string> {
+  if (!activeGeminiApiKey) {
+    throw new Error('No Gemini API key found');
+  }
+
+  const response = await fetchWithRetry(
+    `${GEMINI_API_URL}/models/${modelId}:generateContent?key=${activeGeminiApiKey}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [
+          {
+            role: 'user',
+            parts: [{ text: systemPrompt + '\n\n' + conversationHistory }],
+          },
+        ],
+        generationConfig: {
+          temperature: options?.temperature ?? 0.8,
+          maxOutputTokens: options?.maxTokens ?? 300,
+          topP: options?.topP ?? 0.9,
+        },
+      }),
+      signal,
+    }
+  );
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Gemini API error: ${response.status} ${errorText}`);
+  }
+
+  const result = await response.json();
+  return result.candidates?.[0]?.content?.parts?.[0]?.text || "What's on your mind?";
+}
+
+async function generateWithOpenAI(
+  chatMessages: ChatMessage[],
+  model: string,
+  signal?: AbortSignal,
+  options?: { temperature?: number; maxTokens?: number }
+): Promise<string> {
+  if (!activeOpenAiApiKey) {
+    throw new Error('No OpenAI API key found');
+  }
+
+  const response = await fetchWithRetry(`${OPENAI_API_URL}/chat/completions`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${activeOpenAiApiKey}`,
+    },
+    body: JSON.stringify({
+      model,
+      messages: chatMessages,
+      temperature: options?.temperature ?? 0.8,
+      max_tokens: options?.maxTokens ?? 300,
+    }),
+    signal,
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`OpenAI API error: ${response.status} ${errorText}`);
+  }
+
+  const result = await response.json();
+  return result.choices?.[0]?.message?.content?.trim() || "What's on your mind?";
+}
+
+async function generateWithXAI(
+  chatMessages: ChatMessage[],
+  model: string,
+  signal?: AbortSignal,
+  options?: { temperature?: number; maxTokens?: number }
+): Promise<string> {
+  if (!activeXaiApiKey) {
+    throw new Error('No xAI API key found');
+  }
+
+  const response = await fetchWithRetry(`${XAI_API_URL}/chat/completions`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${activeXaiApiKey}`,
+    },
+    body: JSON.stringify({
+      model,
+      messages: chatMessages,
+      temperature: options?.temperature ?? 0.8,
+      max_tokens: options?.maxTokens ?? 300,
+    }),
+    signal,
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`xAI API error: ${response.status} ${errorText}`);
+  }
+
+  const result = await response.json();
+  return result.choices?.[0]?.message?.content?.trim() || "What's on your mind?";
+}
 
 export async function generateResponse(
   messages: Message[],
   personalFacts: PersonalFact[],
-  relevantMemories: MemoryNode[]
+  relevantMemories: MemoryNode[],
+  relevantMemoryVectors: MemoryVector[] = [],
+  modelOverride?: Partial<ModelPreference>
 ): Promise<AIResponse> {
-  if (!GEMINI_API_KEY) {
-    console.error('❌ No Gemini API key found');
-    return { text: "I'm listening. What's on your mind?" };
-  }
+  const modelPreference = resolveModelPreference(modelOverride);
+  const systemPrompt = buildSystemPrompt(personalFacts, relevantMemories, relevantMemoryVectors);
+  const conversationHistory = formatConversationHistory(messages);
+  const chatMessages = buildChatMessages(systemPrompt, messages);
 
-  try {
-    const systemPrompt = buildSystemPrompt(personalFacts, relevantMemories);
-    const conversationHistory = formatConversationHistory(messages);
-
-    // Create abort controller for timeout
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
-
-    const response = await fetchWithRetry(
-      `${GEMINI_API_URL}/models/gemini-3-flash-preview:generateContent?key=${GEMINI_API_KEY}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [
-            {
-              role: 'user',
-              parts: [{ text: systemPrompt + '\n\n' + conversationHistory }],
-            },
-          ],
-          generationConfig: {
-            temperature: 0.8,
-            maxOutputTokens: 300,
-            topP: 0.9,
-          },
-        }),
-        signal: controller.signal,
+  const runWithPreferredProvider = async (): Promise<AIResponse> => {
+    if (modelPreference.provider === 'openai' && activeOpenAiApiKey) {
+      const { controller, timeoutId } = createTimeoutController();
+      try {
+        const text = await generateWithOpenAI(chatMessages, modelPreference.model, controller.signal);
+        const audioUri = await synthesizeSpeech(text);
+        return { text, audioUri: audioUri || undefined };
+      } finally {
+        clearTimeout(timeoutId);
       }
-    );
-
-    clearTimeout(timeoutId);
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error('❌ Gemini API error:', response.status, errorText);
-      throw new Error(`Gemini API error: ${response.status}`);
     }
 
-    const result = await response.json();
-    const text = result.candidates?.[0]?.content?.parts?.[0]?.text || "What's on your mind?";
+    if (modelPreference.provider === 'xai' && activeXaiApiKey) {
+      const { controller, timeoutId } = createTimeoutController();
+      try {
+        const text = await generateWithXAI(chatMessages, modelPreference.model, controller.signal);
+        const audioUri = await synthesizeSpeech(text);
+        return { text, audioUri: audioUri || undefined };
+      } finally {
+        clearTimeout(timeoutId);
+      }
+    }
 
-    const audioUri = await synthesizeSpeech(text);
+    const { controller, timeoutId } = createTimeoutController();
+    try {
+      const text = await generateWithGemini(
+        systemPrompt,
+        conversationHistory,
+        modelPreference.provider === 'gemini' ? modelPreference.model : DEFAULT_MODELS.gemini,
+        controller.signal
+      );
+      const audioUri = await synthesizeSpeech(text);
+      return { text, audioUri: audioUri || undefined };
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  };
 
-    return { text, audioUri: audioUri || undefined };
+  try {
+    return await runWithPreferredProvider();
   } catch (error) {
     console.error('❌ Response generation error:', error);
+
+    if (modelPreference.provider !== 'gemini' && activeGeminiApiKey) {
+      try {
+        const { controller, timeoutId } = createTimeoutController();
+        try {
+          const text = await generateWithGemini(
+            systemPrompt,
+            conversationHistory,
+            DEFAULT_MODELS.gemini,
+            controller.signal
+          );
+          const audioUri = await synthesizeSpeech(text);
+          return { text, audioUri: audioUri || undefined };
+        } finally {
+          clearTimeout(timeoutId);
+        }
+      } catch (fallbackError) {
+        console.error('❌ Gemini fallback failed:', fallbackError);
+      }
+    }
+
     return { text: "I'm here. What would you like to talk about?" };
   }
 }
@@ -268,7 +541,8 @@ export async function generateResponse(
 // =============================================================================
 
 export async function synthesizeMemory(session: JournalSession): Promise<MemoryNode> {
-  if (!GEMINI_API_KEY || session.messages.length === 0) {
+  const hasAnyModelKey = !!(activeGeminiApiKey || activeOpenAiApiKey || activeXaiApiKey);
+  if (!hasAnyModelKey || session.messages.length === 0) {
     return createEmptyMemory(session.id);
   }
 
@@ -293,27 +567,33 @@ Extract the following as JSON (be specific and genuine, not generic):
 
 Focus on substance. If they just mentioned something in passing, don't include it. If they dwelled on something emotional, capture that. Return only valid JSON.`;
 
-    const response = await fetchWithRetry(
-      `${GEMINI_API_URL}/models/gemini-3-flash-preview:generateContent?key=${GEMINI_API_KEY}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [{ role: 'user', parts: [{ text: prompt }] }],
-          generationConfig: {
-            temperature: 0.2,
-            maxOutputTokens: 800,
-          },
-        }),
+    const memoryModelPref = resolveModelPreference({
+      provider: MEMORY_MODEL_PROVIDER,
+      model: MEMORY_MODEL,
+    });
+
+    const { controller, timeoutId } = createTimeoutController();
+    let text: string;
+    try {
+      text = await runPromptWithModel(prompt, memoryModelPref, controller.signal, {
+        temperature: 0.2,
+        maxTokens: 800,
+      });
+    } catch (error) {
+      console.error('Memory model failed, attempting Gemini fallback:', error);
+      if (memoryModelPref.provider !== 'gemini' && activeGeminiApiKey) {
+        text = await runPromptWithModel(
+          prompt,
+          { provider: 'gemini', model: DEFAULT_MODELS.gemini },
+          controller.signal,
+          { temperature: 0.2, maxTokens: 800 }
+        );
+      } else {
+        throw error;
       }
-    );
-
-    if (!response.ok) {
-      throw new Error(`Memory synthesis failed: ${response.status}`);
+    } finally {
+      clearTimeout(timeoutId);
     }
-
-    const result = await response.json();
-    const text = result.candidates?.[0]?.content?.parts?.[0]?.text || '';
 
     // Parse JSON from response
     const jsonMatch = text.match(/\{[\s\S]*\}/);
@@ -346,6 +626,98 @@ Focus on substance. If they just mentioned something in passing, don't include i
   }
 }
 
+function chunkTranscript(transcript: string, maxWords = 350, overlapWords = 50): string[] {
+  if (!transcript.trim()) return [];
+  const words = transcript.split(/\s+/).filter(Boolean);
+  const chunks: string[] = [];
+  let start = 0;
+  while (start < words.length) {
+    const end = Math.min(start + maxWords, words.length);
+    const slice = words.slice(start, end).join(' ');
+    chunks.push(slice);
+    if (end === words.length) break;
+    start = Math.max(end - overlapWords, start + 1);
+  }
+  return chunks;
+}
+
+function buildHighlightSnippets(memory: MemoryNode, maxItems = 5): string[] {
+  const snippets: string[] = [];
+  if (memory.summary) snippets.push(`Summary: ${memory.summary}`);
+  for (const event of memory.events || []) {
+    snippets.push(`Event: ${event}`);
+  }
+  for (const thought of memory.thoughts || []) {
+    snippets.push(`Insight: ${thought}`);
+  }
+  for (const person of memory.peopleMentioned || []) {
+    snippets.push(`Person: ${person}`);
+  }
+  for (const topic of memory.topics || []) {
+    snippets.push(`Topic: ${topic}`);
+  }
+  for (const emotion of memory.emotions || []) {
+    snippets.push(`Emotion: ${emotion}`);
+  }
+  for (const question of memory.unresolvedQuestions || []) {
+    snippets.push(`Open: ${question}`);
+  }
+
+  // Deduplicate and cap
+  const seen = new Set<string>();
+  const unique: string[] = [];
+  for (const item of snippets) {
+    if (!seen.has(item)) {
+      seen.add(item);
+      unique.push(item);
+    }
+    if (unique.length >= maxItems) break;
+  }
+  return unique;
+}
+
+export async function generateMemoryVectors(
+  session: JournalSession,
+  memory: MemoryNode
+): Promise<MemoryVector[]> {
+  const vectors: MemoryVector[] = [];
+  const timestamp = memory.createdAt || new Date();
+
+  // Chunk embeddings from transcript
+  const chunks = chunkTranscript(session.transcript);
+  for (const chunk of chunks) {
+    const embedding = await generateEmbedding(chunk);
+    if (!embedding) continue;
+    vectors.push({
+      id: uuid(),
+      sessionId: session.id,
+      type: 'chunk',
+      text: chunk,
+      embedding,
+      createdAt: timestamp,
+    });
+    if (vectors.length >= 15) break; // guardrail to prevent bloat
+  }
+
+  // Highlight embeddings derived from memory node
+  const highlights = buildHighlightSnippets(memory);
+  for (const highlight of highlights) {
+    const embedding = await generateEmbedding(highlight);
+    if (!embedding) continue;
+    vectors.push({
+      id: uuid(),
+      sessionId: session.id,
+      type: 'highlight',
+      text: highlight,
+      embedding,
+      createdAt: timestamp,
+    });
+    if (vectors.length >= 20) break; // small overall cap
+  }
+
+  return vectors;
+}
+
 // =============================================================================
 // Personal Knowledge Extraction (Layer 2: Personal Knowledge Base)
 // =============================================================================
@@ -354,7 +726,8 @@ export async function updatePersonalKnowledge(
   session: JournalSession,
   existingFacts: PersonalFact[]
 ): Promise<PersonalFact[]> {
-  if (!GEMINI_API_KEY || session.messages.length === 0) {
+  const hasAnyModelKey = !!(activeGeminiApiKey || activeOpenAiApiKey || activeXaiApiKey);
+  if (!hasAnyModelKey || session.messages.length === 0) {
     return [];
   }
 
@@ -399,27 +772,33 @@ Return JSON array of updates (or empty array if nothing new):
 
 Return only valid JSON array.`;
 
-    const response = await fetchWithRetry(
-      `${GEMINI_API_URL}/models/gemini-3-flash-preview:generateContent?key=${GEMINI_API_KEY}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [{ role: 'user', parts: [{ text: prompt }] }],
-          generationConfig: {
-            temperature: 0.1, // Low temperature for factual extraction
-            maxOutputTokens: 500,
-          },
-        }),
+    const knowledgeModelPref = resolveModelPreference({
+      provider: KNOWLEDGE_MODEL_PROVIDER,
+      model: KNOWLEDGE_MODEL,
+    });
+
+    const { controller, timeoutId } = createTimeoutController();
+    let text: string;
+    try {
+      text = await runPromptWithModel(prompt, knowledgeModelPref, controller.signal, {
+        temperature: 0.1,
+        maxTokens: 500,
+      });
+    } catch (error) {
+      console.error('Knowledge model failed, attempting Gemini fallback:', error);
+      if (knowledgeModelPref.provider !== 'gemini' && activeGeminiApiKey) {
+        text = await runPromptWithModel(
+          prompt,
+          { provider: 'gemini', model: DEFAULT_MODELS.gemini },
+          controller.signal,
+          { temperature: 0.1, maxTokens: 500 }
+        );
+      } else {
+        throw error;
       }
-    );
-
-    if (!response.ok) {
-      throw new Error(`Knowledge extraction failed: ${response.status}`);
+    } finally {
+      clearTimeout(timeoutId);
     }
-
-    const result = await response.json();
-    const text = result.candidates?.[0]?.content?.parts?.[0]?.text || '[]';
 
     // Parse JSON array
     const jsonMatch = text.match(/\[[\s\S]*\]/);
@@ -485,31 +864,101 @@ Return only valid JSON array.`;
 // Semantic Memory Search (Layer 4: Vector Embeddings)
 // =============================================================================
 
+async function embedWithOpenAI(text: string, model: string, signal?: AbortSignal): Promise<number[] | undefined> {
+  if (!activeOpenAiApiKey) {
+    throw new Error('No OpenAI API key for embeddings');
+  }
+
+  const response = await fetchWithRetry(`${OPENAI_API_URL}/embeddings`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${activeOpenAiApiKey}`,
+    },
+    body: JSON.stringify({
+      model,
+      input: text,
+    }),
+    signal,
+  });
+
+  if (!response.ok) {
+    throw new Error(`OpenAI embedding error: ${response.status} ${await response.text()}`);
+  }
+
+  const result = await response.json();
+  return result.data?.[0]?.embedding;
+}
+
+async function embedWithGemini(text: string, model: string, signal?: AbortSignal): Promise<number[] | undefined> {
+  if (!activeGeminiApiKey) {
+    throw new Error('No Gemini API key for embeddings');
+  }
+
+  const response = await fetchWithRetry(
+    `${GEMINI_API_URL}/models/${model}:embedContent?key=${activeGeminiApiKey}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        content: { parts: [{ text }] },
+      }),
+      signal,
+    }
+  );
+
+  if (!response.ok) {
+    throw new Error(`Gemini embedding error: ${response.status}`);
+  }
+
+  const result = await response.json();
+  return result.embedding?.values;
+}
+
+function resolveEmbeddingPreference(): ModelPreference {
+  const provider = EMBEDDING_MODEL_PROVIDER || 'gemini';
+  const model =
+    EMBEDDING_MODEL ||
+    (provider === 'openai'
+      ? 'text-embedding-3-small'
+      : provider === 'xai'
+      ? DEFAULT_MODELS.xai
+      : 'text-embedding-004');
+
+  return { provider, model };
+}
+
 async function generateEmbedding(text: string): Promise<number[] | undefined> {
-  if (!GEMINI_API_KEY || !text) {
+  if (!text) {
     return undefined;
   }
 
   try {
-    const response = await fetchWithRetry(
-      `${GEMINI_API_URL}/models/text-embedding-004:embedContent?key=${GEMINI_API_KEY}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          content: { parts: [{ text }] },
-        }),
-      }
-    );
+    const embeddingPref = resolveEmbeddingPreference();
+    if (embeddingPref.provider === 'openai') {
+      return await embedWithOpenAI(text, embeddingPref.model);
+    }
 
-    if (!response.ok) {
+    if (embeddingPref.provider === 'xai') {
+      console.warn('⚠️ xAI embeddings not supported; falling back to Gemini if available');
+      if (activeGeminiApiKey) {
+        return await embedWithGemini(text, 'text-embedding-004');
+      }
       return undefined;
     }
 
-    const result = await response.json();
-    return result.embedding?.values;
+    return await embedWithGemini(text, embeddingPref.model);
   } catch (error) {
     console.error('Embedding generation error:', error);
+
+    if (EMBEDDING_MODEL_PROVIDER !== 'gemini' && activeGeminiApiKey) {
+      try {
+        return await embedWithGemini(text, 'text-embedding-004');
+      } catch (fallbackError) {
+        console.error('Gemini embedding fallback failed:', fallbackError);
+      }
+    }
+
     return undefined;
   }
 }
@@ -534,8 +983,17 @@ function cosineSimilarity(a: number[], b: number[]): number {
   return magnitude === 0 ? 0 : dotProduct / magnitude;
 }
 
+function recencyWeight(createdAt: Date, halfLifeDays: number): number {
+  if (halfLifeDays <= 0) {
+    return 1;
+  }
+  const ageMs = Date.now() - createdAt.getTime();
+  const ageDays = ageMs / (1000 * 60 * 60 * 24);
+  return Math.exp(-ageDays / halfLifeDays);
+}
+
 /**
- * Find relevant memories using semantic similarity
+ * Find relevant memories using semantic similarity blended with recency
  */
 export async function findRelevantMemories(
   currentContext: string,
@@ -549,38 +1007,61 @@ export async function findRelevantMemories(
   // Filter memories that have embeddings
   const memoriesWithEmbeddings = allMemories.filter((m) => m.embedding && m.embedding.length > 0);
 
-  if (memoriesWithEmbeddings.length === 0) {
-    // Fallback to most recent if no embeddings
-    return allMemories.slice(0, limit);
+  // Choose pool: prefer embedded memories, otherwise use all
+  const pool = memoriesWithEmbeddings.length > 0 ? memoriesWithEmbeddings : allMemories;
+
+  // Generate embedding for current context if we have any embeddings to compare
+  const contextEmbedding =
+    memoriesWithEmbeddings.length > 0 ? await generateEmbedding(currentContext) : undefined;
+
+  const scored = pool.map((memory) => {
+    const similarity =
+      contextEmbedding && memory.embedding ? cosineSimilarity(contextEmbedding, memory.embedding) : 0;
+    const recency = recencyWeight(memory.createdAt, MEMORY_RECENCY_HALF_LIFE_DAYS);
+    const blended = MEMORY_SIMILARITY_WEIGHT * similarity + MEMORY_RECENCY_WEIGHT * recency;
+    return { memory, blended, similarity, recency };
+  });
+
+  // Sort by blended score, then by recency (newer first) for stability
+  const sorted = scored.sort((a, b) => {
+    if (b.blended !== a.blended) return b.blended - a.blended;
+    return b.memory.createdAt.getTime() - a.memory.createdAt.getTime();
+  });
+
+  return sorted.slice(0, limit).map((item) => item.memory);
+}
+
+export async function findRelevantMemoryVectors(
+  currentContext: string,
+  vectors: MemoryVector[],
+  limit: number = 5
+): Promise<MemoryVector[]> {
+  if (vectors.length === 0) {
+    return [];
   }
 
-  // Generate embedding for current context
   const contextEmbedding = await generateEmbedding(currentContext);
-
   if (!contextEmbedding) {
-    // Fallback to recency if embedding fails
-    return allMemories.slice(0, limit);
+    // Fallback to recency only
+    return vectors
+      .slice()
+      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
+      .slice(0, limit);
   }
 
-  // Use min-heap for top-k selection (O(n log k) instead of O(n log n))
-  const topK: { memory: MemoryNode; score: number }[] = [];
+  const scored = vectors.map((vector) => {
+    const similarity = vector.embedding ? cosineSimilarity(contextEmbedding, vector.embedding) : 0;
+    const recency = recencyWeight(vector.createdAt, MEMORY_RECENCY_HALF_LIFE_DAYS);
+    const blended = MEMORY_SIMILARITY_WEIGHT * similarity + MEMORY_RECENCY_WEIGHT * recency;
+    return { vector, blended, similarity, recency };
+  });
 
-  for (const memory of memoriesWithEmbeddings) {
-    const score = cosineSimilarity(contextEmbedding, memory.embedding!);
+  const sorted = scored.sort((a, b) => {
+    if (b.blended !== a.blended) return b.blended - a.blended;
+    return b.vector.createdAt.getTime() - a.vector.createdAt.getTime();
+  });
 
-    if (topK.length < limit) {
-      topK.push({ memory, score });
-      // Maintain min-heap property (smallest score at index 0)
-      topK.sort((a, b) => a.score - b.score);
-    } else if (score > topK[0].score) {
-      // Replace the smallest if current is larger
-      topK[0] = { memory, score };
-      topK.sort((a, b) => a.score - b.score);
-    }
-  }
-
-  // Return in descending order (most relevant first)
-  return topK.reverse().map((item) => item.memory);
+  return sorted.slice(0, limit).map((item) => item.vector);
 }
 
 // =============================================================================
@@ -688,7 +1169,8 @@ function formatTranscriptForAnalysis(messages: Message[]): string {
 
 function buildSystemPrompt(
   personalFacts: PersonalFact[],
-  relevantMemories: MemoryNode[]
+  relevantMemories: MemoryNode[],
+  relevantMemoryVectors: MemoryVector[]
 ): string {
   let prompt = `You are a thoughtful friend helping someone journal through voice conversation.
 
@@ -755,6 +1237,14 @@ RESPONSE LENGTH:
       if (memory.emotions.length > 0) {
         prompt += ` (felt: ${memory.emotions.join(', ')})`;
       }
+    }
+  }
+
+  if (relevantMemoryVectors.length > 0) {
+    prompt += '\n\nPAST DETAILS:';
+    for (const vector of relevantMemoryVectors) {
+      const text = vector.text.length > 220 ? `${vector.text.slice(0, 217)}...` : vector.text;
+      prompt += `\n- ${text}`;
     }
   }
 

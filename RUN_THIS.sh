@@ -24,3 +24,6 @@ echo ""
 
 # Start with tunnel mode for better connectivity
 npx expo start --tunnel --clear
+
+
+# THIS IS IT: cd ~/Desktop/SecondBrain/app && npx expo start --tunnel --clear

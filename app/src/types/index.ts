@@ -31,6 +31,17 @@ export interface MemoryNode {
   embedding?: number[]; // Vector embedding for semantic search
 }
 
+export type MemoryVectorType = 'chunk' | 'highlight';
+
+export interface MemoryVector {
+  id: string;
+  sessionId: string;
+  type: MemoryVectorType;
+  text: string;
+  embedding?: number[];
+  createdAt: Date;
+}
+
 export interface PersonalFact {
   id: string;
   category: 'biographical' | 'preferences' | 'relationships' | 'goals' | 'habits';

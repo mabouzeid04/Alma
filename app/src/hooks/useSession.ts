@@ -1,6 +1,6 @@
 import { useState, useCallback, useRef } from 'react';
 import { v4 as uuid } from 'uuid';
-import { JournalSession, Message, ConversationState, MemoryNode } from '../types';
+import { JournalSession, Message, ConversationState, MemoryNode, MemoryVector } from '../types';
 import * as database from '../services/database';
 import * as audio from '../services/audio';
 import * as ai from '../services/ai';
@@ -16,6 +16,7 @@ export function useSession() {
 
   // Cache for memory retrieval (avoid re-fetching on every message)
   const allMemoriesRef = useRef<MemoryNode[]>([]);
+  const allMemoryVectorsRef = useRef<MemoryVector[]>([]);
 
   // Start a new session
   const startSession = useCallback(async () => {
@@ -39,16 +40,21 @@ export function useSession() {
     try {
       const allSessions = await database.getAllSessions();
       const memories: MemoryNode[] = [];
+      const vectors: MemoryVector[] = [];
       for (const s of allSessions) {
         const memory = await database.getMemoryNodeForSession(s.id);
         if (memory && memory.summary) {
           memories.push(memory);
         }
+        const sessionVectors = await database.getMemoryVectorsForSession(s.id);
+        vectors.push(...sessionVectors);
       }
       allMemoriesRef.current = memories;
+      allMemoryVectorsRef.current = vectors;
     } catch (error) {
       console.warn('Failed to load memories:', error);
       allMemoriesRef.current = [];
+      allMemoryVectorsRef.current = [];
     }
 
     // Save session to database
@@ -147,12 +153,21 @@ export function useSession() {
       );
       console.log(`💭 Found ${relevantMemories.length} relevant memories`);
 
+      // Retrieve granular memory vectors (chunks/highlights)
+      const relevantMemoryVectors = await ai.findRelevantMemoryVectors(
+        transcription.text,
+        allMemoryVectorsRef.current,
+        5
+      );
+      console.log(`🧩 Found ${relevantMemoryVectors.length} memory snippets`);
+
       // Generate response with full context
       console.log('⚙️ Generating AI response...');
       const response = await ai.generateResponse(
         updatedMessages,
         personalFacts,
-        relevantMemories
+        relevantMemories,
+        relevantMemoryVectors
       );
       console.log('✅ AI response received:', response.text.substring(0, 50));
 
@@ -237,6 +252,13 @@ export function useSession() {
       }
     }
 
+    // Layer 4: Create and save chunk/highlight embeddings
+    console.log('Generating memory vectors (chunks/highlights)...');
+    await database.deleteMemoryVectorsForSession(updatedSession.id);
+    const vectors = await ai.generateMemoryVectors(updatedSession, memoryNode);
+    await database.saveMemoryVectors(vectors);
+    console.log(`Memory vectors saved: ${vectors.length}`);
+
     haptics.sessionEnded();
 
     // Reset state
@@ -245,6 +267,7 @@ export function useSession() {
     setConversationState('idle');
     sessionStartTime.current = null;
     allMemoriesRef.current = [];
+    allMemoryVectorsRef.current = [];
 
     return updatedSession;
   }, [currentSession, messages]);
