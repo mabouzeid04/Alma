@@ -1,7 +1,7 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useRouter } from 'expo-router';
+import { useRouter, useLocalSearchParams } from 'expo-router';
 import Animated, {
   useSharedValue,
   useAnimatedStyle,
@@ -15,10 +15,14 @@ import Animated, {
 import { LinearGradient } from 'expo-linear-gradient';
 import { colors, spacing, typography } from '../src/theme';
 import { haptics } from '../src/services/haptics';
+import { processSessionMemory } from '../src/hooks';
+import * as database from '../src/services/database';
 
 export default function ProcessingScreen() {
   const router = useRouter();
+  const { sessionId } = useLocalSearchParams<{ sessionId: string }>();
   const [dots, setDots] = useState('');
+  const processingStarted = useRef(false);
 
   // Orb animations
   const scale = useSharedValue(1);
@@ -79,17 +83,45 @@ export default function ProcessingScreen() {
       setDots((prev) => (prev.length >= 3 ? '' : prev + '.'));
     }, 500);
 
-    // Minimum processing time of 2 seconds, then navigate to summary
-    const processingTimer = setTimeout(() => {
-      haptics.medium();
-      router.replace('/summary');
-    }, 3000);
+    // Process the session memory
+    const processMemory = async () => {
+      // Guard against multiple calls (React strict mode, fast refresh, etc.)
+      if (processingStarted.current) return;
+      processingStarted.current = true;
+
+      if (!sessionId) {
+        console.error('No sessionId provided to processing screen');
+        router.replace('/');
+        return;
+      }
+
+      try {
+        // Load session from database
+        const session = await database.getSession(sessionId);
+        if (!session) {
+          console.error('Session not found:', sessionId);
+          router.replace('/');
+          return;
+        }
+
+        // Do the actual memory processing
+        await processSessionMemory(session);
+
+        haptics.medium();
+        router.replace('/summary');
+      } catch (error) {
+        console.error('Error processing session memory:', error);
+        // Still navigate to summary even on error
+        router.replace('/summary');
+      }
+    };
+
+    processMemory();
 
     return () => {
       clearInterval(dotsInterval);
-      clearTimeout(processingTimer);
     };
-  }, []);
+  }, [sessionId, router]);
 
   const orbAnimatedStyle = useAnimatedStyle(() => ({
     transform: [

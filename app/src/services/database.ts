@@ -1,5 +1,5 @@
 import * as SQLite from 'expo-sqlite';
-import { JournalSession, MemoryNode, MemoryVector, PersonalFact, Message } from '../types';
+import { JournalSession, MemoryNode, MemoryVector, Message, Insight, InsightsReport, InsightPeriod } from '../types';
 
 const DATABASE_NAME = 'secondbrain.db';
 
@@ -50,15 +50,10 @@ async function initializeTables(): Promise<void> {
       FOREIGN KEY (session_id) REFERENCES sessions (id) ON DELETE CASCADE
     );
 
-    CREATE TABLE IF NOT EXISTS personal_facts (
+    CREATE TABLE IF NOT EXISTS personal_knowledge (
       id TEXT PRIMARY KEY,
-      category TEXT NOT NULL,
-      key TEXT NOT NULL,
-      value TEXT NOT NULL,
-      context TEXT,
-      created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL,
-      is_active INTEGER DEFAULT 1
+      content TEXT NOT NULL,
+      updated_at TEXT NOT NULL
     );
 
     CREATE TABLE IF NOT EXISTS memory_vectors (
@@ -73,9 +68,35 @@ async function initializeTables(): Promise<void> {
 
     CREATE INDEX IF NOT EXISTS idx_messages_session ON messages (session_id);
     CREATE INDEX IF NOT EXISTS idx_memory_nodes_session ON memory_nodes (session_id);
-    CREATE INDEX IF NOT EXISTS idx_personal_facts_category ON personal_facts (category);
     CREATE INDEX IF NOT EXISTS idx_sessions_started_at ON sessions (started_at DESC);
     CREATE INDEX IF NOT EXISTS idx_memory_vectors_session ON memory_vectors (session_id);
+
+    CREATE TABLE IF NOT EXISTS insights_reports (
+      id TEXT PRIMARY KEY,
+      period TEXT NOT NULL,
+      session_count INTEGER NOT NULL,
+      generated_at TEXT NOT NULL,
+      emotional_summary TEXT NOT NULL,
+      topic_summary TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS insights (
+      id TEXT PRIMARY KEY,
+      report_id TEXT NOT NULL,
+      type TEXT NOT NULL,
+      title TEXT NOT NULL,
+      narrative TEXT NOT NULL,
+      supporting_data TEXT NOT NULL,
+      priority TEXT NOT NULL,
+      generated_at TEXT NOT NULL,
+      expires_at TEXT,
+      period TEXT NOT NULL,
+      FOREIGN KEY (report_id) REFERENCES insights_reports (id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_insights_reports_period ON insights_reports (period);
+    CREATE INDEX IF NOT EXISTS idx_insights_reports_generated_at ON insights_reports (generated_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_insights_report ON insights (report_id);
   `);
 }
 
@@ -291,61 +312,225 @@ export async function getMemoryVectorsForSession(sessionId: string): Promise<Mem
   }));
 }
 
-// Personal facts operations
-export async function savePersonalFact(fact: PersonalFact): Promise<void> {
+// Personal knowledge operations (markdown-based)
+export async function getPersonalKnowledge(): Promise<string> {
   const database = await getDatabase();
+  const row = await database.getFirstAsync<any>(
+    `SELECT content FROM personal_knowledge WHERE id = 'default'`
+  );
+  return row?.content ?? '';
+}
+
+export async function savePersonalKnowledge(content: string): Promise<void> {
+  const database = await getDatabase();
+  const now = new Date().toISOString();
   await database.runAsync(
-    `INSERT OR REPLACE INTO personal_facts
-     (id, category, key, value, context, created_at, updated_at, is_active)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT OR REPLACE INTO personal_knowledge (id, content, updated_at) VALUES (?, ?, ?)`,
+    ['default', content, now]
+  );
+}
+
+// Aggregation operations for insights
+
+export async function getAllMemoryNodes(): Promise<MemoryNode[]> {
+  const database = await getDatabase();
+  const rows = await database.getAllAsync<any>(
+    `SELECT * FROM memory_nodes ORDER BY created_at DESC`
+  );
+
+  return rows.map((row) => ({
+    id: row.id,
+    sessionId: row.session_id,
+    createdAt: new Date(row.created_at),
+    summary: row.summary,
+    topics: JSON.parse(row.topics),
+    emotions: JSON.parse(row.emotions),
+    events: JSON.parse(row.events),
+    peopleMentioned: JSON.parse(row.people_mentioned),
+    thoughts: JSON.parse(row.thoughts),
+    unresolvedQuestions: JSON.parse(row.unresolved_questions),
+    embedding: row.embedding ? JSON.parse(row.embedding) : undefined,
+  }));
+}
+
+export async function getAllMemoryVectors(): Promise<MemoryVector[]> {
+  const database = await getDatabase();
+  const rows = await database.getAllAsync<any>(
+    `SELECT * FROM memory_vectors ORDER BY created_at DESC`
+  );
+
+  return rows.map((row) => ({
+    id: row.id,
+    sessionId: row.session_id,
+    type: row.type,
+    text: row.text,
+    embedding: row.embedding ? JSON.parse(row.embedding) : undefined,
+    createdAt: new Date(row.created_at),
+  }));
+}
+
+export async function getSessionsInDateRange(
+  startDate: Date,
+  endDate: Date
+): Promise<JournalSession[]> {
+  const database = await getDatabase();
+  const rows = await database.getAllAsync<any>(
+    `SELECT * FROM sessions
+     WHERE started_at >= ? AND started_at <= ?
+     ORDER BY started_at DESC`,
+    [startDate.toISOString(), endDate.toISOString()]
+  );
+
+  const sessions: JournalSession[] = [];
+  for (const row of rows) {
+    const messages = await getMessagesForSession(row.id);
+    sessions.push({
+      id: row.id,
+      startedAt: new Date(row.started_at),
+      endedAt: row.ended_at ? new Date(row.ended_at) : undefined,
+      transcript: row.transcript,
+      duration: row.duration,
+      wordCount: row.word_count,
+      messages,
+    });
+  }
+
+  return sessions;
+}
+
+export async function getMemoryNodesInDateRange(
+  startDate: Date,
+  endDate: Date
+): Promise<MemoryNode[]> {
+  const database = await getDatabase();
+  const rows = await database.getAllAsync<any>(
+    `SELECT * FROM memory_nodes
+     WHERE created_at >= ? AND created_at <= ?
+     ORDER BY created_at DESC`,
+    [startDate.toISOString(), endDate.toISOString()]
+  );
+
+  return rows.map((row) => ({
+    id: row.id,
+    sessionId: row.session_id,
+    createdAt: new Date(row.created_at),
+    summary: row.summary,
+    topics: JSON.parse(row.topics),
+    emotions: JSON.parse(row.emotions),
+    events: JSON.parse(row.events),
+    peopleMentioned: JSON.parse(row.people_mentioned),
+    thoughts: JSON.parse(row.thoughts),
+    unresolvedQuestions: JSON.parse(row.unresolved_questions),
+    embedding: row.embedding ? JSON.parse(row.embedding) : undefined,
+  }));
+}
+
+export async function getSessionCount(): Promise<number> {
+  const database = await getDatabase();
+  const result = await database.getFirstAsync<{ count: number }>(
+    `SELECT COUNT(*) as count FROM sessions`
+  );
+  return result?.count ?? 0;
+}
+
+// Insights operations
+
+export async function saveInsightsReport(report: InsightsReport): Promise<void> {
+  const database = await getDatabase();
+
+  // Save the report
+  await database.runAsync(
+    `INSERT OR REPLACE INTO insights_reports
+     (id, period, session_count, generated_at, emotional_summary, topic_summary)
+     VALUES (?, ?, ?, ?, ?, ?)`,
     [
-      fact.id,
-      fact.category,
-      fact.key,
-      fact.value,
-      fact.context ?? null,
-      fact.createdAt.toISOString(),
-      fact.updatedAt.toISOString(),
-      fact.isActive ? 1 : 0,
+      report.id,
+      report.period,
+      report.sessionCount,
+      report.generatedAt.toISOString(),
+      JSON.stringify(report.emotionalSummary),
+      JSON.stringify(report.topicSummary),
     ]
   );
+
+  // Delete old insights for this report
+  await database.runAsync(`DELETE FROM insights WHERE report_id = ?`, [report.id]);
+
+  // Save individual insights
+  for (const insight of report.insights) {
+    await database.runAsync(
+      `INSERT INTO insights
+       (id, report_id, type, title, narrative, supporting_data, priority, generated_at, expires_at, period)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        insight.id,
+        report.id,
+        insight.type,
+        insight.title,
+        insight.narrative,
+        JSON.stringify(insight.supportingData),
+        insight.priority,
+        insight.generatedAt.toISOString(),
+        insight.expiresAt?.toISOString() ?? null,
+        insight.period,
+      ]
+    );
+  }
 }
 
-export async function getActivePersonalFacts(): Promise<PersonalFact[]> {
+export async function getInsightsReportForPeriod(
+  period: InsightPeriod
+): Promise<InsightsReport | null> {
   const database = await getDatabase();
-  const rows = await database.getAllAsync<any>(
-    `SELECT * FROM personal_facts WHERE is_active = 1 ORDER BY category, key`
+
+  const reportRow = await database.getFirstAsync<any>(
+    `SELECT * FROM insights_reports
+     WHERE period = ?
+     ORDER BY generated_at DESC
+     LIMIT 1`,
+    [period]
   );
 
-  return rows.map((row) => ({
+  if (!reportRow) return null;
+
+  const insightRows = await database.getAllAsync<any>(
+    `SELECT * FROM insights WHERE report_id = ? ORDER BY priority ASC`,
+    [reportRow.id]
+  );
+
+  const insights: Insight[] = insightRows.map((row) => ({
     id: row.id,
-    category: row.category,
-    key: row.key,
-    value: row.value,
-    context: row.context ?? undefined,
-    createdAt: new Date(row.created_at),
-    updatedAt: new Date(row.updated_at),
-    isActive: row.is_active === 1,
+    type: row.type,
+    title: row.title,
+    narrative: row.narrative,
+    supportingData: JSON.parse(row.supporting_data),
+    priority: row.priority,
+    generatedAt: new Date(row.generated_at),
+    expiresAt: row.expires_at ? new Date(row.expires_at) : undefined,
+    period: row.period,
   }));
+
+  return {
+    id: reportRow.id,
+    generatedAt: new Date(reportRow.generated_at),
+    period: reportRow.period,
+    sessionCount: reportRow.session_count,
+    insights,
+    emotionalSummary: JSON.parse(reportRow.emotional_summary),
+    topicSummary: JSON.parse(reportRow.topic_summary),
+  };
 }
 
-export async function getPersonalFactsByCategory(
-  category: PersonalFact['category']
-): Promise<PersonalFact[]> {
+export async function deleteInsightsReportForPeriod(period: InsightPeriod): Promise<void> {
   const database = await getDatabase();
-  const rows = await database.getAllAsync<any>(
-    `SELECT * FROM personal_facts WHERE category = ? AND is_active = 1 ORDER BY key`,
-    [category]
+  await database.runAsync(
+    `DELETE FROM insights_reports WHERE period = ?`,
+    [period]
   );
+}
 
-  return rows.map((row) => ({
-    id: row.id,
-    category: row.category,
-    key: row.key,
-    value: row.value,
-    context: row.context ?? undefined,
-    createdAt: new Date(row.created_at),
-    updatedAt: new Date(row.updated_at),
-    isActive: row.is_active === 1,
-  }));
+export async function clearAllInsights(): Promise<void> {
+  const database = await getDatabase();
+  await database.runAsync(`DELETE FROM insights`);
+  await database.runAsync(`DELETE FROM insights_reports`);
 }

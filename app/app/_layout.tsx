@@ -60,6 +60,19 @@ export default function RootLayout() {
             animation: 'slide_from_right',
           }}
         />
+        <Stack.Screen
+          name="insights"
+          options={{
+            animation: 'slide_from_bottom',
+            presentation: 'modal',
+          }}
+        />
+        <Stack.Screen
+          name="settings"
+          options={{
+            animation: 'slide_from_right',
+          }}
+        />
       </Stack>
     </GestureHandlerRootView>
   );

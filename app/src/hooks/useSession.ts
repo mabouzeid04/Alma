@@ -6,12 +6,35 @@ import * as audio from '../services/audio';
 import * as ai from '../services/ai';
 import { haptics } from '../services/haptics';
 
+// Standalone function to process session memory (can be called from processing screen)
+export async function processSessionMemory(session: JournalSession): Promise<void> {
+  // Layer 3: Synthesize memory node from session
+  console.log('Synthesizing memory from session...');
+  const memoryNode = await ai.synthesizeMemory(session);
+  if (memoryNode.summary) {
+    await database.saveMemoryNode(memoryNode);
+    console.log('Memory saved:', memoryNode.summary.substring(0, 50) + '...');
+  }
+
+  // Layer 2: Extract and update personal knowledge
+  console.log('Extracting personal knowledge...');
+  await ai.updatePersonalKnowledge(session);
+
+  // Layer 4: Create and save chunk/highlight embeddings
+  console.log('Generating memory vectors (chunks/highlights)...');
+  await database.deleteMemoryVectorsForSession(session.id);
+  const vectors = await ai.generateMemoryVectors(session, memoryNode);
+  await database.saveMemoryVectors(vectors);
+  console.log(`Memory vectors saved: ${vectors.length}`);
+}
+
 export function useSession() {
   const [currentSession, setCurrentSession] = useState<JournalSession | null>(null);
   const [conversationState, setConversationState] = useState<ConversationState>('idle');
   const [isRecording, setIsRecording] = useState(false);
   const [messages, setMessages] = useState<Message[]>([]);
   const [audioLevel, setAudioLevel] = useState(0);
+  const [isEnding, setIsEnding] = useState(false);
   const sessionStartTime = useRef<Date | null>(null);
 
   // Cache for memory retrieval (avoid re-fetching on every message)
@@ -140,8 +163,8 @@ export function useSession() {
       console.log('🎯 Starting AI response generation...');
 
       // Layer 2: Personal Knowledge Base (ALWAYS loaded)
-      const personalFacts = await database.getActivePersonalFacts();
-      console.log(`📚 Loaded ${personalFacts.length} personal facts`);
+      const personalKnowledge = await database.getPersonalKnowledge();
+      console.log(`📚 Loaded personal knowledge (${personalKnowledge.length} chars)`);
 
       // Layer 3 & 4: Find relevant past memories using semantic search
       // Use the user's latest message as context for retrieval
@@ -165,7 +188,7 @@ export function useSession() {
       console.log('⚙️ Generating AI response...');
       const response = await ai.generateResponse(
         updatedMessages,
-        personalFacts,
+        personalKnowledge,
         relevantMemories,
         relevantMemoryVectors
       );
@@ -198,9 +221,12 @@ export function useSession() {
     setConversationState('idle');
   }, [currentSession, isRecording, messages]);
 
-  // End the session
-  const endSession = useCallback(async () => {
-    if (!currentSession) return;
+  // Prepare session for ending (fast - just saves basic data)
+  // Returns the session ID for use in processing
+  const prepareEndSession = useCallback(async (): Promise<string | null> => {
+    if (!currentSession || isEnding) return null;
+
+    setIsEnding(true);
 
     const endedAt = new Date();
     const duration = sessionStartTime.current
@@ -226,38 +252,8 @@ export function useSession() {
     // Save final session state
     await database.updateSession(updatedSession);
 
-    // Layer 3: Synthesize memory node from session
-    console.log('Synthesizing memory from session...');
-    const memoryNode = await ai.synthesizeMemory(updatedSession);
-    if (memoryNode.summary) {
-      await database.saveMemoryNode(memoryNode);
-      console.log('Memory saved:', memoryNode.summary.substring(0, 50) + '...');
-    }
-
-    // Layer 2: Extract and update personal knowledge
-    console.log('Extracting personal knowledge...');
-    const existingFacts = await database.getActivePersonalFacts();
-    const newFacts = await ai.updatePersonalKnowledge(updatedSession, existingFacts);
-
-    // Save new facts
-    for (const fact of newFacts) {
-      await database.savePersonalFact(fact);
-      console.log(`New fact: ${fact.category}/${fact.key} = ${fact.value}`);
-    }
-
-    // Save updated existing facts (those that were deactivated)
-    for (const fact of existingFacts) {
-      if (!fact.isActive) {
-        await database.savePersonalFact(fact);
-      }
-    }
-
-    // Layer 4: Create and save chunk/highlight embeddings
-    console.log('Generating memory vectors (chunks/highlights)...');
-    await database.deleteMemoryVectorsForSession(updatedSession.id);
-    const vectors = await ai.generateMemoryVectors(updatedSession, memoryNode);
-    await database.saveMemoryVectors(vectors);
-    console.log(`Memory vectors saved: ${vectors.length}`);
+    // Store session ID for processing screen
+    const sessionId = updatedSession.id;
 
     haptics.sessionEnded();
 
@@ -269,8 +265,23 @@ export function useSession() {
     allMemoriesRef.current = [];
     allMemoryVectorsRef.current = [];
 
-    return updatedSession;
-  }, [currentSession, messages]);
+    return sessionId;
+  }, [currentSession, messages, isEnding]);
+
+  // Legacy endSession for backwards compatibility (does everything)
+  const endSession = useCallback(async () => {
+    const sessionId = await prepareEndSession();
+    if (!sessionId) return null;
+
+    // Get the session back from database
+    const session = await database.getSession(sessionId);
+    if (!session) return null;
+
+    // Process memory (this is the slow part)
+    await processSessionMemory(session);
+
+    return session;
+  }, [prepareEndSession]);
 
   // Pause/resume
   const pauseRecording = useCallback(async () => {
@@ -291,12 +302,14 @@ export function useSession() {
     currentSession,
     conversationState,
     isRecording,
+    isEnding,
     messages,
     audioLevel,
     startSession,
     startRecording,
     stopRecording,
     endSession,
+    prepareEndSession,
     pauseRecording,
     resumeRecording,
   };

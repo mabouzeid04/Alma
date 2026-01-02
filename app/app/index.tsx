@@ -4,6 +4,7 @@ import {
   Text,
   StyleSheet,
   Dimensions,
+  Pressable,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
@@ -19,6 +20,7 @@ import {
   Gesture,
   GestureDetector,
 } from 'react-native-gesture-handler';
+import { Ionicons } from '@expo/vector-icons';
 import { colors, spacing, typography } from '../src/theme';
 import { PulsingOrb } from '../src/components';
 import { haptics } from '../src/services/haptics';
@@ -45,6 +47,16 @@ export default function HomeScreen() {
   const navigateToHistory = useCallback(() => {
     haptics.light();
     router.push('/history');
+  }, [router]);
+
+  const navigateToInsights = useCallback(() => {
+    haptics.light();
+    router.push('/insights');
+  }, [router]);
+
+  const navigateToSettings = useCallback(() => {
+    haptics.light();
+    router.push('/settings');
   }, [router]);
 
   // Swipe up gesture for history
@@ -80,6 +92,37 @@ export default function HomeScreen() {
       <View style={styles.container}>
         <SafeAreaView style={styles.safeArea}>
           <Animated.View style={[styles.content, animatedStyle]}>
+            {/* Header with Settings and Insights Buttons */}
+            <Animated.View
+              entering={FadeIn.delay(100).duration(500)}
+              style={styles.headerContainer}
+            >
+              <Pressable
+                onPress={navigateToSettings}
+                style={({ pressed }) => [
+                  styles.headerButton,
+                  pressed && styles.headerButtonPressed,
+                ]}
+                hitSlop={20}
+              >
+                <Ionicons name="person-outline" size={22} color={colors.textSecondary} />
+              </Pressable>
+              {sessionCount >= 3 ? (
+                <Pressable
+                  onPress={navigateToInsights}
+                  style={({ pressed }) => [
+                    styles.headerButton,
+                    pressed && styles.headerButtonPressed,
+                  ]}
+                  hitSlop={20}
+                >
+                  <Ionicons name="sparkles-outline" size={22} color={colors.textSecondary} />
+                </Pressable>
+              ) : (
+                <View style={styles.headerSpacer} />
+              )}
+            </Animated.View>
+
             {/* Greeting - Top third */}
             <Animated.View
               entering={FadeIn.delay(100).duration(500)}
@@ -162,8 +205,24 @@ const styles = StyleSheet.create({
     flex: 1,
     paddingHorizontal: spacing.lg,
   },
+  headerContainer: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingTop: spacing.sm,
+  },
+  headerSpacer: {
+    width: 40,
+  },
+  headerButton: {
+    padding: spacing.xs,
+    opacity: 0.6,
+  },
+  headerButtonPressed: {
+    opacity: 0.3,
+  },
   greetingContainer: {
-    paddingTop: spacing.xxxxl, // 60px from safe area
+    paddingTop: spacing.xl,
     alignItems: 'center',
   },
   greeting: {

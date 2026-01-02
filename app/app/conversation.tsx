@@ -33,12 +33,13 @@ export default function ConversationScreen() {
     currentSession,
     conversationState,
     isRecording,
+    isEnding,
     messages,
     audioLevel,
     startSession,
     startRecording,
     stopRecording,
-    endSession,
+    prepareEndSession,
   } = useSession();
 
   // Map conversation state to waveform state
@@ -75,30 +76,40 @@ export default function ConversationScreen() {
   }, [conversationState]);
 
   const handleEndSession = useCallback(async () => {
+    // Prevent multiple presses
+    if (isEnding) return;
+
     // Check if session is very short (less than 10 seconds worth of content)
     if (messages.length <= 1) {
       setShowShortSessionModal(true);
     } else {
       try {
-        await endSession();
-        haptics.sessionEnded();
+        // Prepare session (fast) and get session ID
+        const sessionId = await prepareEndSession();
+        if (sessionId) {
+          // Navigate immediately with session ID for processing
+          router.replace(`/processing?sessionId=${sessionId}`);
+        }
       } catch (error) {
         console.error('Error ending session:', error);
       }
-      router.replace('/processing');
     }
-  }, [messages.length, endSession, router]);
+  }, [messages.length, prepareEndSession, router, isEnding]);
 
   const handleConfirmEndShortSession = useCallback(async () => {
+    // Prevent multiple presses
+    if (isEnding) return;
+
     setShowShortSessionModal(false);
     try {
-      await endSession();
-      haptics.sessionEnded();
+      const sessionId = await prepareEndSession();
+      if (sessionId) {
+        router.replace(`/processing?sessionId=${sessionId}`);
+      }
     } catch (error) {
       console.error('Error ending session:', error);
     }
-    router.replace('/processing');
-  }, [endSession, router]);
+  }, [prepareEndSession, router, isEnding]);
 
   const handleDonePress = useCallback(() => {
     if (isRecording) {
@@ -116,13 +127,17 @@ export default function ConversationScreen() {
 
           <Pressable
             onPress={handleDonePress}
+            disabled={isEnding}
             style={({ pressed }) => [
               styles.doneButton,
               pressed && styles.doneButtonPressed,
+              isEnding && styles.doneButtonDisabled,
             ]}
             hitSlop={12}
           >
-            <Text style={styles.doneText}>Done</Text>
+            <Text style={[styles.doneText, isEnding && styles.doneTextDisabled]}>
+              {isEnding ? 'Saving...' : 'Done'}
+            </Text>
           </Pressable>
         </Animated.View>
       </SafeAreaView>
@@ -273,6 +288,13 @@ const styles = StyleSheet.create({
     ...typography.body,
     color: colors.text,
     fontWeight: '600',
+  },
+  doneButtonDisabled: {
+    backgroundColor: colors.primary,
+    opacity: 0.7,
+  },
+  doneTextDisabled: {
+    color: '#FFFFFF',
   },
   // Modal styles
   modalOverlay: {

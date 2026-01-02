@@ -10,8 +10,9 @@
  * Uses ElevenLabs for voice (REST API) and supports Gemini, Grok, and GPT.
  */
 
-import { Message, MemoryNode, MemoryVector, PersonalFact, JournalSession } from '../types';
+import { Message, MemoryNode, MemoryVector, JournalSession } from '../types';
 import { v4 as uuid } from 'uuid';
+import { fetchWithRetry, createTimeoutController } from './api-utils';
 
 // =============================================================================
 // Configuration
@@ -31,7 +32,7 @@ const XAI_API_URL = 'https://api.x.ai/v1';
 const DEFAULT_MODELS = {
   gemini: process.env.EXPO_PUBLIC_GEMINI_MODEL || 'gemini-3-flash-preview',
   openai: process.env.EXPO_PUBLIC_OPENAI_MODEL || 'gpt-5-mini',
-  xai: process.env.EXPO_PUBLIC_XAI_MODEL || 'grok-4.1-fast',
+  xai: process.env.EXPO_PUBLIC_XAI_MODEL || 'grok-4-1-fast-non-reasoning',
 };
 
 const MEMORY_MODEL_PROVIDER = process.env.EXPO_PUBLIC_MEMORY_MODEL_PROVIDER as ModelProvider | undefined;
@@ -75,15 +76,6 @@ export interface AIResponse {
 }
 
 type ChatMessage = { role: 'system' | 'user' | 'assistant'; content: string };
-
-interface PersonalFactUpdate {
-  action: 'add' | 'update' | 'deactivate';
-  category: PersonalFact['category'];
-  key: string;
-  value: string;
-  context?: string;
-  previousFactId?: string;
-}
 
 // =============================================================================
 // State
@@ -268,12 +260,6 @@ export async function synthesizeSpeech(text: string): Promise<string | null> {
 // Conversation Response (Multi-provider)
 // =============================================================================
 
-function createTimeoutController(timeoutMs = 10000) {
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-  return { controller, timeoutId };
-}
-
 function inferProviderFromModelName(model?: string): ModelProvider {
   const normalized = (model || '').toLowerCase();
   if (normalized.includes('grok') || normalized.includes('xai')) return 'xai';
@@ -306,12 +292,12 @@ function resolveModelPreference(overrides?: Partial<ModelPreference>): ModelPref
 }
 
 function buildChatMessages(systemPrompt: string, messages: Message[]): ChatMessage[] {
-  const recentMessages: ChatMessage[] = messages.slice(-10).map((msg) => ({
+  const allMessages: ChatMessage[] = messages.map((msg) => ({
     role: msg.isUser ? ('user' as const) : ('assistant' as const),
     content: msg.content,
   }));
 
-  return [{ role: 'system' as const, content: systemPrompt }, ...recentMessages];
+  return [{ role: 'system' as const, content: systemPrompt }, ...allMessages];
 }
 
 async function runPromptWithModel(
@@ -459,13 +445,13 @@ async function generateWithXAI(
 
 export async function generateResponse(
   messages: Message[],
-  personalFacts: PersonalFact[],
+  personalKnowledge: string,
   relevantMemories: MemoryNode[],
   relevantMemoryVectors: MemoryVector[] = [],
   modelOverride?: Partial<ModelPreference>
 ): Promise<AIResponse> {
   const modelPreference = resolveModelPreference(modelOverride);
-  const systemPrompt = buildSystemPrompt(personalFacts, relevantMemories, relevantMemoryVectors);
+  const systemPrompt = buildSystemPrompt(personalKnowledge, relevantMemories, relevantMemoryVectors);
   const conversationHistory = formatConversationHistory(messages);
   const chatMessages = buildChatMessages(systemPrompt, messages);
 
@@ -577,7 +563,7 @@ Focus on substance. If they just mentioned something in passing, don't include i
     try {
       text = await runPromptWithModel(prompt, memoryModelPref, controller.signal, {
         temperature: 0.2,
-        maxTokens: 800,
+        maxTokens: 2000,
       });
     } catch (error) {
       console.error('Memory model failed, attempting Gemini fallback:', error);
@@ -586,7 +572,7 @@ Focus on substance. If they just mentioned something in passing, don't include i
           prompt,
           { provider: 'gemini', model: DEFAULT_MODELS.gemini },
           controller.signal,
-          { temperature: 0.2, maxTokens: 800 }
+          { temperature: 0.2, maxTokens: 2000 }
         );
       } else {
         throw error;
@@ -626,7 +612,7 @@ Focus on substance. If they just mentioned something in passing, don't include i
   }
 }
 
-function chunkTranscript(transcript: string, maxWords = 350, overlapWords = 50): string[] {
+function chunkTranscript(transcript: string, maxWords = 500, overlapWords = 50): string[] {
   if (!transcript.trim()) return [];
   const words = transcript.split(/\s+/).filter(Boolean);
   const chunks: string[] = [];
@@ -696,7 +682,6 @@ export async function generateMemoryVectors(
       embedding,
       createdAt: timestamp,
     });
-    if (vectors.length >= 15) break; // guardrail to prevent bloat
   }
 
   // Highlight embeddings derived from memory node
@@ -712,65 +697,66 @@ export async function generateMemoryVectors(
       embedding,
       createdAt: timestamp,
     });
-    if (vectors.length >= 20) break; // small overall cap
   }
 
   return vectors;
 }
 
 // =============================================================================
-// Personal Knowledge Extraction (Layer 2: Personal Knowledge Base)
+// Personal Knowledge Management (Layer 2: Persistent Facts with Smart Updates)
 // =============================================================================
 
-export async function updatePersonalKnowledge(
-  session: JournalSession,
-  existingFacts: PersonalFact[]
-): Promise<PersonalFact[]> {
+/**
+ * Updates personal knowledge by intelligently merging new facts.
+ * Uses LLM to identify which existing facts should be replaced vs added.
+ * Each fact is timestamped with last-modified date.
+ */
+export async function updatePersonalKnowledge(session: JournalSession): Promise<void> {
   const hasAnyModelKey = !!(activeGeminiApiKey || activeOpenAiApiKey || activeXaiApiKey);
   if (!hasAnyModelKey || session.messages.length === 0) {
-    return [];
+    return;
   }
 
   try {
     const transcript = formatTranscriptForAnalysis(session.messages);
-    const existingFactsFormatted = existingFacts
-      .map((f) => `${f.category}: ${f.key} = ${f.value}${f.context ? ` (${f.context})` : ''}`)
-      .join('\n');
+    const currentKnowledge = await import('../services/database').then((m) => m.getPersonalKnowledge());
+    const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
 
-    const prompt = `Analyze this journal conversation to identify PERSISTENT facts about the user that should be remembered long-term.
+    // Parse existing knowledge to show facts with line numbers for replacement
+    const numberedFacts = numberExistingFacts(currentKnowledge);
 
-EXISTING KNOWN FACTS:
-${existingFactsFormatted || '(none yet)'}
+    const prompt = `You are updating a personal knowledge base. Extract ONLY persistent facts from this journal entry.
 
-CONVERSATION:
+CURRENT KNOWLEDGE (with line numbers for reference):
+${numberedFacts || '(empty - no facts yet)'}
+
+NEW JOURNAL ENTRY:
 ${transcript}
 
-Look for NEW or CHANGED information about:
-- biographical: college, major, hometown, job, age
-- preferences: favorite things, dislikes, habits
-- relationships: names of girlfriend/boyfriend, friends, family, coworkers
-- goals: aspirations, things they're working toward
-- habits: routines, regular activities
+RULES:
+1. ONLY extract PERSISTENT facts: job, relationships, family, location, goals, ongoing habits, core values
+2. NEVER extract temporary states: "tired today", "went to a party", "had a meeting"
+3. Be EXTREMELY conservative - only add facts explicitly stated
+4. When something CHANGES (new job, breakup, moved cities), REPLACE the old fact
+5. Write facts as COMPLETE, SPECIFIC sentences with context - avoid single words or vague statements
 
-Rules:
-- Only extract facts explicitly stated or strongly implied
-- If they mention breaking up, update relationship status
-- If they mention a new job/school, update that
-- Don't extract temporary states (feeling tired today)
-- Do extract persistent traits (I'm always anxious before presentations)
+OUTPUT FORMAT - respond with ONLY these commands, one per line:
 
-Return JSON array of updates (or empty array if nothing new):
-[
-  {
-    "action": "add" | "update" | "deactivate",
-    "category": "biographical" | "preferences" | "relationships" | "goals" | "habits",
-    "key": "descriptive key like 'girlfriend' or 'college'",
-    "value": "the actual value",
-    "context": "optional context like 'as of Dec 2024' or 'ended Dec 2024'"
-  }
-]
+ADD [CATEGORY] fact text here
+REPLACE [line_number] fact text here
+DELETE [line_number]
 
-Return only valid JSON array.`;
+Categories: BIOGRAPHICAL, RELATIONSHIPS, GOALS, PREFERENCES
+
+EXAMPLES:
+- User says "I started at Apple last month" and line 3 says "Works at Google" → REPLACE [3] Works at Apple as a software engineer (started January 2024)
+- User says "My girlfriend is Sarah" with no prior relationship info → ADD [RELATIONSHIPS] Dating Sarah (girlfriend, met through mutual friends)
+- User says "We broke up" and line 5 says "Dating Sarah" → REPLACE [5] Recently became single after ending 2-year relationship with Sarah
+- User mentions going to a concert → (no output - temporary event)
+
+IMPORTANT: Make facts detailed and specific. Instead of "Single" write "Recently became single after ending relationship with [name]". Instead of "Works at Apple" write "Works at Apple as [role] in [team/location]". Include relevant context when mentioned.
+
+If there's NOTHING to update, respond with exactly: NO_CHANGES`;
 
     const knowledgeModelPref = resolveModelPreference({
       provider: KNOWLEDGE_MODEL_PROVIDER,
@@ -782,7 +768,7 @@ Return only valid JSON array.`;
     try {
       text = await runPromptWithModel(prompt, knowledgeModelPref, controller.signal, {
         temperature: 0.1,
-        maxTokens: 500,
+        maxTokens: 1000,
       });
     } catch (error) {
       console.error('Knowledge model failed, attempting Gemini fallback:', error);
@@ -791,7 +777,7 @@ Return only valid JSON array.`;
           prompt,
           { provider: 'gemini', model: DEFAULT_MODELS.gemini },
           controller.signal,
-          { temperature: 0.1, maxTokens: 500 }
+          { temperature: 0.1, maxTokens: 1000 }
         );
       } else {
         throw error;
@@ -800,64 +786,262 @@ Return only valid JSON array.`;
       clearTimeout(timeoutId);
     }
 
-    // Parse JSON array
-    const jsonMatch = text.match(/\[[\s\S]*\]/);
-    if (!jsonMatch) {
-      return [];
+    if (!text || text.trim() === 'NO_CHANGES' || text.includes('NO_CHANGES')) {
+      console.log('📝 No knowledge updates');
+      return;
     }
 
-    const updates: PersonalFactUpdate[] = JSON.parse(jsonMatch[0]);
-    const newFacts: PersonalFact[] = [];
-    const now = new Date();
-
-    for (const update of updates) {
-      if (update.action === 'add') {
-        newFacts.push({
-          id: uuid(),
-          category: update.category,
-          key: update.key,
-          value: update.value,
-          context: update.context,
-          createdAt: now,
-          updatedAt: now,
-          isActive: true,
-        });
-      } else if (update.action === 'update') {
-        // Find and deactivate old fact, create new one
-        const oldFact = existingFacts.find(
-          (f) => f.category === update.category && f.key === update.key && f.isActive
-        );
-        if (oldFact) {
-          oldFact.isActive = false;
-          oldFact.updatedAt = now;
-        }
-        newFacts.push({
-          id: uuid(),
-          category: update.category,
-          key: update.key,
-          value: update.value,
-          context: update.context,
-          createdAt: now,
-          updatedAt: now,
-          isActive: true,
-        });
-      } else if (update.action === 'deactivate') {
-        const oldFact = existingFacts.find(
-          (f) => f.category === update.category && f.key === update.key && f.isActive
-        );
-        if (oldFact) {
-          oldFact.isActive = false;
-          oldFact.updatedAt = now;
-          oldFact.context = update.context || `ended ${now.toLocaleDateString()}`;
-        }
-      }
+    // Parse and apply the commands
+    const commands = parseKnowledgeCommands(text);
+    if (commands.length === 0) {
+      console.log('📝 No valid commands parsed');
+      return;
     }
 
-    return newFacts;
+    const updatedKnowledge = applyKnowledgeCommands(currentKnowledge, commands, today);
+    await import('../services/database').then((m) => m.savePersonalKnowledge(updatedKnowledge));
+    console.log(`📝 Applied ${commands.length} knowledge update(s)`);
   } catch (error) {
     console.error('Personal knowledge extraction error:', error);
-    return [];
   }
+}
+
+interface ParsedFact {
+  lineNumber: number;
+  category: string;
+  date: string;
+  text: string;
+}
+
+/**
+ * Parses existing knowledge and numbers each fact for LLM reference
+ */
+function numberExistingFacts(knowledge: string): string {
+  if (!knowledge || !knowledge.trim()) return '';
+
+  const lines = knowledge.split('\n');
+  const output: string[] = [];
+  let currentCategory = '';
+  let factNumber = 1;
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+
+    // Category header
+    const headerMatch = trimmed.match(/^##\s+(.+)$/);
+    if (headerMatch) {
+      currentCategory = headerMatch[1];
+      output.push(`\n${trimmed}`);
+      continue;
+    }
+
+    // Fact line with date prefix: [YYYY-MM-DD] fact text
+    const factMatch = trimmed.match(/^\[(\d{4}-\d{2}-\d{2})\]\s*(.+)$/);
+    if (factMatch && currentCategory) {
+      output.push(`  ${factNumber}. [${factMatch[1]}] ${factMatch[2]}`);
+      factNumber++;
+    } else if (currentCategory && trimmed) {
+      // Legacy fact without date - show it numbered
+      output.push(`  ${factNumber}. ${trimmed}`);
+      factNumber++;
+    }
+  }
+
+  return output.join('\n').trim();
+}
+
+/**
+ * Parses all facts from knowledge into structured array
+ */
+function parseAllFacts(knowledge: string): ParsedFact[] {
+  if (!knowledge || !knowledge.trim()) return [];
+
+  const facts: ParsedFact[] = [];
+  const lines = knowledge.split('\n');
+  let currentCategory = '';
+  let factNumber = 1;
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+
+    const headerMatch = trimmed.match(/^##\s+(.+)$/);
+    if (headerMatch) {
+      currentCategory = headerMatch[1];
+      continue;
+    }
+
+    if (!currentCategory) continue;
+
+    // Fact with date
+    const factMatch = trimmed.match(/^\[(\d{4}-\d{2}-\d{2})\]\s*(.+)$/);
+    if (factMatch) {
+      facts.push({
+        lineNumber: factNumber,
+        category: currentCategory,
+        date: factMatch[1],
+        text: factMatch[2],
+      });
+      factNumber++;
+    } else if (trimmed) {
+      // Legacy fact without date
+      facts.push({
+        lineNumber: factNumber,
+        category: currentCategory,
+        date: '',
+        text: trimmed,
+      });
+      factNumber++;
+    }
+  }
+
+  return facts;
+}
+
+type KnowledgeCommand =
+  | { type: 'ADD'; category: string; fact: string }
+  | { type: 'REPLACE'; lineNumber: number; fact: string }
+  | { type: 'DELETE'; lineNumber: number };
+
+/**
+ * Parses LLM output into structured commands
+ */
+function parseKnowledgeCommands(text: string): KnowledgeCommand[] {
+  const commands: KnowledgeCommand[] = [];
+  const lines = text.split('\n').map((l) => l.trim()).filter((l) => l);
+
+  for (const line of lines) {
+    // ADD [CATEGORY] fact
+    const addMatch = line.match(/^ADD\s+\[([A-Z\s&]+)\]\s+(.+)$/i);
+    if (addMatch) {
+      commands.push({
+        type: 'ADD',
+        category: addMatch[1].trim().toUpperCase(),
+        fact: addMatch[2].trim(),
+      });
+      continue;
+    }
+
+    // REPLACE [number] fact
+    const replaceMatch = line.match(/^REPLACE\s+\[(\d+)\]\s+(.+)$/i);
+    if (replaceMatch) {
+      commands.push({
+        type: 'REPLACE',
+        lineNumber: parseInt(replaceMatch[1], 10),
+        fact: replaceMatch[2].trim(),
+      });
+      continue;
+    }
+
+    // DELETE [number]
+    const deleteMatch = line.match(/^DELETE\s+\[(\d+)\]$/i);
+    if (deleteMatch) {
+      commands.push({
+        type: 'DELETE',
+        lineNumber: parseInt(deleteMatch[1], 10),
+      });
+    }
+  }
+
+  return commands;
+}
+
+/**
+ * Applies commands to existing knowledge and rebuilds markdown
+ */
+function applyKnowledgeCommands(
+  currentKnowledge: string,
+  commands: KnowledgeCommand[],
+  today: string
+): string {
+  // Parse existing facts
+  const facts = parseAllFacts(currentKnowledge);
+
+  // Build a map of lineNumber -> fact for quick updates
+  const factMap = new Map<number, ParsedFact>();
+  for (const fact of facts) {
+    factMap.set(fact.lineNumber, fact);
+  }
+
+  // Track deletions
+  const deletedLines = new Set<number>();
+
+  // Apply commands
+  for (const cmd of commands) {
+    if (cmd.type === 'DELETE') {
+      deletedLines.add(cmd.lineNumber);
+    } else if (cmd.type === 'REPLACE') {
+      const existing = factMap.get(cmd.lineNumber);
+      if (existing) {
+        existing.text = cmd.fact;
+        existing.date = today;
+      }
+    } else if (cmd.type === 'ADD') {
+      // Add new fact with next line number
+      const maxLine = Math.max(0, ...Array.from(factMap.keys()));
+      facts.push({
+        lineNumber: maxLine + 1,
+        category: cmd.category,
+        date: today,
+        text: cmd.fact,
+      });
+      factMap.set(maxLine + 1, facts[facts.length - 1]);
+    }
+  }
+
+  // Filter out deleted facts
+  const remainingFacts = facts.filter((f) => !deletedLines.has(f.lineNumber));
+
+  // Group by category
+  const byCategory: Record<string, ParsedFact[]> = {};
+  for (const fact of remainingFacts) {
+    if (!byCategory[fact.category]) {
+      byCategory[fact.category] = [];
+    }
+    byCategory[fact.category].push(fact);
+  }
+
+  // Rebuild markdown with ordered categories
+  const orderedCategories = [
+    'BIOGRAPHICAL',
+    'RELATIONSHIPS',
+    'GOALS',
+    'PREFERENCES',
+    'WELLNESS',
+    'CHALLENGES',
+    'VALUES',
+  ];
+
+  const markdown: string[] = [];
+
+  // Add ordered categories first
+  for (const category of orderedCategories) {
+    const categoryFacts = byCategory[category];
+    if (categoryFacts && categoryFacts.length > 0) {
+      markdown.push(`## ${category}`);
+      for (const fact of categoryFacts) {
+        const datePrefix = fact.date ? `[${fact.date}]` : `[${today}]`;
+        markdown.push(`${datePrefix} ${fact.text}`);
+      }
+      markdown.push('');
+      delete byCategory[category];
+    }
+  }
+
+  // Add any remaining categories
+  for (const [category, categoryFacts] of Object.entries(byCategory)) {
+    if (categoryFacts.length > 0) {
+      markdown.push(`## ${category}`);
+      for (const fact of categoryFacts) {
+        const datePrefix = fact.date ? `[${fact.date}]` : `[${today}]`;
+        markdown.push(`${datePrefix} ${fact.text}`);
+      }
+      markdown.push('');
+    }
+  }
+
+  return markdown.join('\n').trim();
 }
 
 // =============================================================================
@@ -998,7 +1182,7 @@ function recencyWeight(createdAt: Date, halfLifeDays: number): number {
 export async function findRelevantMemories(
   currentContext: string,
   allMemories: MemoryNode[],
-  limit: number = 3
+  limit: number = 20
 ): Promise<MemoryNode[]> {
   if (allMemories.length === 0) {
     return [];
@@ -1034,7 +1218,7 @@ export async function findRelevantMemories(
 export async function findRelevantMemoryVectors(
   currentContext: string,
   vectors: MemoryVector[],
-  limit: number = 5
+  limit: number = 30
 ): Promise<MemoryVector[]> {
   if (vectors.length === 0) {
     return [];
@@ -1068,69 +1252,6 @@ export async function findRelevantMemoryVectors(
 // Helper Functions
 // =============================================================================
 
-/**
- * Helper to fetch with exponential backoff and 429 retry handling
- */
-async function fetchWithRetry(
-  url: string,
-  options: RequestInit,
-  maxRetries = 3,
-  initialDelay = 2000
-): Promise<Response> {
-  let lastError: Error | null = null;
-  
-  for (let i = 0; i <= maxRetries; i++) {
-    try {
-      if (i > 0) {
-        const delay = initialDelay * Math.pow(2, i - 1);
-        await new Promise(resolve => setTimeout(resolve, delay));
-      }
-
-      const response = await fetch(url, options);
-
-      if (response.ok) {
-        return response;
-      }
-
-      if (response.status === 429) {
-        const errorData = await response.clone().json().catch(() => ({}));
-        let retryAfter = initialDelay;
-
-        const retryInfo = (errorData.error?.details as any[] | undefined)?.find(
-          (d) => d['@type'] === 'type.googleapis.com/google.rpc.RetryInfo'
-        );
-        
-        const retryDelay = retryInfo?.retryDelay as string | undefined;
-        
-        if (retryDelay) {
-          const seconds = parseFloat(retryDelay.replace('s', ''));
-          if (!isNaN(seconds)) {
-            retryAfter = seconds * 1000 + 500;
-          }
-        }
-
-        if (i < maxRetries) {
-          console.warn(`⚠️ Gemini Rate Limit (429). Retrying in ${retryAfter}ms...`);
-          await new Promise(resolve => setTimeout(resolve, retryAfter));
-          continue; 
-        }
-      }
-
-      if (response.status >= 500 && i < maxRetries) {
-        continue;
-      }
-
-      return response;
-    } catch (error) {
-      lastError = error instanceof Error ? error : new Error(String(error));
-      if (i < maxRetries) continue;
-      throw lastError;
-    }
-  }
-  
-  throw lastError || new Error('Max retries reached');
-}
-
 export function getGreeting(): string {
   const hour = new Date().getHours();
   if (hour < 12) return 'How are you feeling about the day?';
@@ -1156,7 +1277,6 @@ function createEmptyMemory(sessionId: string): MemoryNode {
 
 function formatConversationHistory(messages: Message[]): string {
   return messages
-    .slice(-10) // Last 10 messages for context
     .map((msg) => `${msg.isUser ? 'USER' : 'ASSISTANT'}: ${msg.content}`)
     .join('\n');
 }
@@ -1168,7 +1288,7 @@ function formatTranscriptForAnalysis(messages: Message[]): string {
 }
 
 function buildSystemPrompt(
-  personalFacts: PersonalFact[],
+  personalKnowledge: string,
   relevantMemories: MemoryNode[],
   relevantMemoryVectors: MemoryVector[]
 ): string {
@@ -1182,7 +1302,6 @@ YOUR PERSONALITY:
 
 CONVERSATION STYLE:
 - Listen more than you talk
-- Acknowledge what they said before asking anything
 - Ask ONE question at a time, max
 - Sometimes just respond with understanding, no question needed
 - Don't treat every statement as needing deep exploration
@@ -1212,26 +1331,13 @@ RESPONSE LENGTH:
 - Don't over-explain or over-question`;
 
   // Add personal knowledge base (Layer 2 - always in context)
-  if (personalFacts.length > 0) {
-    prompt += '\n\nWHAT YOU KNOW ABOUT THEM:';
-    const factsByCategory: Record<string, PersonalFact[]> = {};
-    for (const fact of personalFacts) {
-      if (!factsByCategory[fact.category]) {
-        factsByCategory[fact.category] = [];
-      }
-      factsByCategory[fact.category].push(fact);
-    }
-    for (const [category, facts] of Object.entries(factsByCategory)) {
-      prompt += `\n${category.toUpperCase()}:`;
-      for (const fact of facts) {
-        prompt += `\n- ${fact.key}: ${fact.value}${fact.context ? ` (${fact.context})` : ''}`;
-      }
-    }
+  if (personalKnowledge.trim()) {
+    prompt += '\n\nWHAT YOU KNOW ABOUT THEM:\n' + personalKnowledge;
   }
 
   // Add relevant memories (Layer 3 - retrieved based on context)
   if (relevantMemories.length > 0) {
-    prompt += '\n\nRELEVANT PAST CONVERSATIONS:';
+    prompt += '\n\nRELEVANT PAST CONVERSATIONS (treat as context, only reference if explicitly relevant):';
     for (const memory of relevantMemories) {
       prompt += `\n- ${memory.summary}`;
       if (memory.emotions.length > 0) {
@@ -1241,7 +1347,7 @@ RESPONSE LENGTH:
   }
 
   if (relevantMemoryVectors.length > 0) {
-    prompt += '\n\nPAST DETAILS:';
+    prompt += '\n\nPAST DETAILS (treat as context, only reference if genuinely relevant):';
     for (const vector of relevantMemoryVectors) {
       const text = vector.text.length > 500 ? `${vector.text.slice(0, 497)}...` : vector.text;
       prompt += `\n- ${text}`;
