@@ -1243,7 +1243,7 @@ RESPONSE LENGTH:
   if (relevantMemoryVectors.length > 0) {
     prompt += '\n\nPAST DETAILS:';
     for (const vector of relevantMemoryVectors) {
-      const text = vector.text.length > 220 ? `${vector.text.slice(0, 217)}...` : vector.text;
+      const text = vector.text.length > 500 ? `${vector.text.slice(0, 497)}...` : vector.text;
       prompt += `\n- ${text}`;
     }
   }

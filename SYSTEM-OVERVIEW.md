@@ -1,6 +1,6 @@
 ## System Overview – Changes vs origin/main
 
-Date: 2026-01-01
+Date: 2026-01-02
 
 ### Memory & Retrieval
 - Added recency-weighted retrieval (60-day half-life, 0.7 similarity / 0.3 recency blend).
@@ -28,6 +28,22 @@ Date: 2026-01-01
 ### Notes
 - New table creation runs automatically via existing init flow; no manual migration needed.
 - Retrieval falls back to recency-only if embeddings are missing/unavailable.
+
+---
+
+## Recent Changes - January 2, 2026
+
+### AI Service Optimization
+- **Memory Vector Display**: Increased character limit for memory vector text snippets from 220 to 500 characters in `app/src/services/ai.ts` to provide more context in AI responses.
+
+### Model Provider Update
+- **Primary Models**: Switched all model providers from "grok" to "xai" in `app/.env`:
+  - Primary model provider: `grok` → `xai`
+  - Memory model provider: `grok` → `xai`
+  - Knowledge model provider: `grok` → `xai`
+  - All using `grok-4.1-fast-non-reasoning` model
+- **Embedding Model**: Kept Gemini as embedding provider for consistency.
+
 # System Overview & Recent Changes
 
 ## Project: Second Brain
