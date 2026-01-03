@@ -224,35 +224,35 @@ export default function ConversationScreen() {
       </ScrollView>
 
       {/* Waveform - Bottom third - Tap to send */}
-      <Animated.View
-        entering={SlideInDown.delay(300).springify()}
-        style={styles.waveformContainer}
-      >
-        <Pressable
-          onPress={() => {
-            if (isRecording) {
-              console.log('Stopping recording to send...');
-              stopRecording();
-            } else if (conversationState === 'idle') {
-              console.log('Starting recording...');
-              startRecording();
-            }
-          }}
-          style={styles.waveformTouchable}
+      <SafeAreaView edges={['bottom']} style={styles.bottomSafe}>
+        <Animated.View
+          entering={SlideInDown.delay(300).springify()}
+          style={styles.waveformContainer}
         >
-          <WaveformVisualizer
-            state={getWaveformState()}
-            particleCount={24}
-            size={120}
-            audioLevel={audioLevel}
-          />
-          <Text style={styles.waveformHint}>
-            {isRecording ? 'Tap to send' : conversationState === 'idle' ? 'Tap to speak' : ''}
-          </Text>
-        </Pressable>
-      </Animated.View>
-
-      <SafeAreaView edges={['bottom']} style={styles.bottomSafe} />
+          <Pressable
+            onPress={() => {
+              if (isRecording) {
+                console.log('Stopping recording to send...');
+                stopRecording();
+              } else if (conversationState === 'idle') {
+                console.log('Starting recording...');
+                startRecording();
+              }
+            }}
+            style={styles.waveformTouchable}
+          >
+            <WaveformVisualizer
+              state={getWaveformState()}
+              particleCount={24}
+              size={120}
+              audioLevel={audioLevel}
+            />
+            <Text style={styles.waveformHint}>
+              {isRecording ? 'Tap to send' : conversationState === 'idle' ? 'Tap to speak' : ''}
+            </Text>
+          </Pressable>
+        </Animated.View>
+      </SafeAreaView>
     </View>
   );
 }

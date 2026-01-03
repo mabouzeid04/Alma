@@ -1,6 +1,31 @@
 ## System Overview – Changes vs origin/main
 
-Date: 2026-01-02
+Date: 2026-01-03
+
+### Recent Changes - January 3, 2026
+
+### Summary Screen Enhancements
+- **Session-Specific Navigation**: Updated `app/app/summary.tsx` to accept `sessionId` route parameter, enabling direct navigation to specific session summaries
+- **Loading States**: Added proper loading indicators with `ActivityIndicator` and state management for better UX during session loading
+- **Error Handling**: Improved error recovery with navigation fallback to home screen when sessions are not found
+- **Route Parameter Support**: Integrated `useLocalSearchParams` for dynamic session selection
+
+### Audio Service Improvements
+- **Enhanced Waveform Metering**: Improved audio level detection in `app/src/services/audio.ts` with fallback simulation for consistent waveform visualization
+- **Organic Oscillation**: Added simulated audio levels with natural variation when real metering data is unavailable
+- **Recording Stability**: Better handling of audio metering during recording sessions
+
+### Conversation Screen Updates
+- **Waveform Integration**: Enhanced touch handling and visual feedback in `app/app/conversation.tsx`
+- **UI Container**: Added dedicated waveform container with slide-in animation
+- **Interaction Improvements**: Better press handling for recording start/stop functionality
+
+### Minor Service Updates
+- **Processing Screen**: Refined loading states and user feedback in `app/app/processing.tsx`
+- **Session Hook**: Minor optimizations in `app/src/hooks/useSession.ts`
+- **Database Service**: Small improvements in `app/src/services/database.ts`
+
+---
 
 ### Memory & Retrieval
 - Added recency-weighted retrieval (60-day half-life, 0.7 similarity / 0.3 recency blend).

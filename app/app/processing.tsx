@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useRef } from 'react';
-import { View, Text, StyleSheet } from 'react-native';
+import { View, Text, StyleSheet, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import Animated, {
@@ -100,7 +100,11 @@ export default function ProcessingScreen() {
         const session = await database.getSession(sessionId);
         if (!session) {
           console.error('Session not found:', sessionId);
-          router.replace('/');
+          Alert.alert(
+            'Session Not Found',
+            'Could not find the recording session. Please try again.',
+            [{ text: 'OK', onPress: () => router.replace('/') }]
+          );
           return;
         }
 
@@ -108,11 +112,12 @@ export default function ProcessingScreen() {
         await processSessionMemory(session);
 
         haptics.medium();
-        router.replace('/summary');
+        router.replace(`/summary?sessionId=${sessionId}`);
       } catch (error) {
         console.error('Error processing session memory:', error);
-        // Still navigate to summary even on error
-        router.replace('/summary');
+        // Still pass the sessionId even if processing fails
+        // The summary screen can show the raw transcript
+        router.replace(`/summary?sessionId=${sessionId}`);
       }
     };
 

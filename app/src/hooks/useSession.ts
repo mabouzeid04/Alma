@@ -136,7 +136,6 @@ export function useSession() {
   const stopRecording = useCallback(async () => {
     if (!currentSession || !isRecording) return;
 
-    setConversationState('processing');
     const result = await audio.stopRecording();
     setIsRecording(false);
     haptics.recordingStopped();
@@ -157,6 +156,9 @@ export function useSession() {
       const updatedMessages = [...messages, userMessage];
       setMessages(updatedMessages);
       await database.addMessage(currentSession.id, userMessage);
+
+      // Now show processing state (after user message is visible)
+      setConversationState('processing');
 
       // Generate AI response with full memory context
       setConversationState('responding');

@@ -5,9 +5,10 @@ import {
   StyleSheet,
   ScrollView,
   Pressable,
+  ActivityIndicator,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useRouter } from 'expo-router';
+import { useRouter, useLocalSearchParams } from 'expo-router';
 import Animated, {
   FadeIn,
   FadeInUp,
@@ -23,27 +24,42 @@ import * as database from '../src/services/database';
 
 export default function SummaryScreen() {
   const router = useRouter();
+  const { sessionId: routeSessionId } = useLocalSearchParams<{ sessionId: string }>();
   const [session, setSession] = useState<JournalSession | null>(null);
   const [memoryNode, setMemoryNode] = useState<MemoryNode | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
     loadLatestSession();
   }, []);
 
   const loadLatestSession = async () => {
+    setIsLoading(true);
     try {
-      const sessions = await database.getAllSessions();
-      if (sessions.length > 0) {
-        const latestSession = sessions[0];
-        setSession(latestSession);
+      // Use the sessionId from route params if available
+      const targetSessionId = routeSessionId || (await database.getAllSessions())[0]?.id;
 
-        const memory = await database.getMemoryNodeForSession(latestSession.id);
-        if (memory) {
-          setMemoryNode(memory);
-        }
+      if (!targetSessionId) {
+        console.error('No session ID available');
+        router.replace('/');
+        return;
       }
+
+      const session = await database.getSession(targetSessionId);
+      if (!session) {
+        console.error('Session not found:', targetSessionId);
+        router.replace('/');
+        return;
+      }
+
+      setSession(session);
+
+      const memory = await database.getMemoryNodeForSession(targetSessionId);
+      setMemoryNode(memory);
     } catch (error) {
-      console.error('Failed to load session:', error);
+      console.error('Error loading session:', error);
+    } finally {
+      setIsLoading(false);
     }
   };
 
@@ -99,23 +115,30 @@ export default function SummaryScreen() {
             contentContainerStyle={styles.content}
             showsVerticalScrollIndicator={false}
           >
-            {/* Title */}
-            <Animated.View
-              entering={FadeInUp.delay(200).springify()}
-              style={styles.titleContainer}
-            >
-              <Text style={styles.title}>Session Summary</Text>
-            </Animated.View>
+            {isLoading ? (
+              <View style={styles.loadingContainer}>
+                <ActivityIndicator size="large" color={colors.primary} />
+                <Text style={styles.loadingText}>Loading your summary...</Text>
+              </View>
+            ) : (
+              <>
+                {/* Title */}
+                <Animated.View
+                  entering={FadeInUp.delay(200).springify()}
+                  style={styles.titleContainer}
+                >
+                  <Text style={styles.title}>Session Summary</Text>
+                </Animated.View>
 
-            {/* Summary Text */}
-            <Animated.View
-              entering={FadeInUp.delay(300).springify()}
-              style={styles.summaryContainer}
-            >
-              <Text style={styles.summaryText}>
-                {memoryNode?.summary || 'Processing your session...'}
-              </Text>
-            </Animated.View>
+                {/* Summary Text */}
+                <Animated.View
+                  entering={FadeInUp.delay(300).springify()}
+                  style={styles.summaryContainer}
+                >
+                  <Text style={styles.summaryText}>
+                    {memoryNode?.summary || 'Processing your session...'}
+                  </Text>
+                </Animated.View>
 
             {/* Topics */}
             {memoryNode?.topics && memoryNode.topics.length > 0 && (
@@ -179,15 +202,17 @@ export default function SummaryScreen() {
               </Pressable>
             </Animated.View>
 
-            {/* Confirmation */}
-            <Animated.View
-              entering={FadeIn.delay(700)}
-              style={styles.confirmationContainer}
-            >
-              <Text style={styles.confirmationText}>
-                Session saved · {timestamp}
-              </Text>
-            </Animated.View>
+                {/* Confirmation */}
+                <Animated.View
+                  entering={FadeIn.delay(700)}
+                  style={styles.confirmationContainer}
+                >
+                  <Text style={styles.confirmationText}>
+                    Session saved · {timestamp}
+                  </Text>
+                </Animated.View>
+              </>
+            )}
           </ScrollView>
         </SafeAreaView>
       </View>
@@ -294,5 +319,16 @@ const styles = StyleSheet.create({
     ...typography.caption,
     color: colors.textSecondary,
     opacity: 0.6,
+  },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: spacing.xl,
+  },
+  loadingText: {
+    ...typography.body,
+    color: colors.textSecondary,
+    marginTop: spacing.xl,
   },
 });

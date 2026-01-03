@@ -8,6 +8,7 @@ let db: SQLite.SQLiteDatabase | null = null;
 export async function getDatabase(): Promise<SQLite.SQLiteDatabase> {
   if (db) return db;
   db = await SQLite.openDatabaseAsync(DATABASE_NAME);
+  await db.execAsync('PRAGMA foreign_keys = ON;');
   await initializeTables();
   return db;
 }
