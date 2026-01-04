@@ -1,6 +1,36 @@
 ## System Overview – Changes vs origin/main
 
-Date: 2026-01-03
+Date: 2026-01-04
+
+### Recent Changes - January 4, 2026
+
+### E2E Testing Infrastructure
+- **Detox Framework Integration**: Added comprehensive end-to-end testing framework with Jest configuration
+  - New Detox configuration (`app/.detoxrc.js`) for iOS simulator testing
+  - E2E test directory (`app/e2e/`) with test plan, initial tests, and setup files
+  - Package scripts added: `detox:build:ios`, `detox:test:ios`, `detox:test:ios:reuse`
+- **Database E2E Support**: Enhanced `app/src/services/database.ts` with seeding functionality
+  - `clearAllSessions()` function for test data cleanup
+  - `setE2ESeedScenario()` for configurable test data scenarios
+  - Automatic E2E seed application during test runs
+- **Test Dependencies**: Added Detox, Jest, and TypeScript testing dependencies to `app/package.json`
+
+### Insights UI Improvements
+- **Enhanced Insufficient Data Messaging**: Improved user guidance in `app/app/insights.tsx`
+  - Dynamic session count display with remaining sessions needed
+  - Better copy: "What I noticed" → "What we noticed" for more collaborative tone
+  - Clear progress indication toward insights unlock threshold
+
+### Development Tools & Configuration
+- **Cursor Command Added**: New security review command (`.cursor/commands/secreview.md`) for automated PR security analysis
+- **Build Script Cleanup**: Removed `app/start.sh` file (redundant with existing scripts)
+
+### Dependencies Updated
+- **Testing Framework**: Jest 30.2.0, Detox 20.46.3, ts-jest 29.4.6
+- **Type Definitions**: Added @types/jest for comprehensive type coverage
+- **Development Tools**: Enhanced testing and build capabilities
+
+---
 
 ### Recent Changes - January 3, 2026
 
