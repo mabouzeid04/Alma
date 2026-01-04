@@ -13,8 +13,9 @@ import { useRouter } from 'expo-router';
 import Animated, { FadeIn, FadeInUp, SlideInDown } from 'react-native-reanimated';
 import { Ionicons } from '@expo/vector-icons';
 import { colors, spacing, typography, borderRadius, shadows } from '../src/theme';
-import { useInsights, InsightsState } from '../src/hooks/useInsights';
+import { useInsights } from '../src/hooks/useInsights';
 import { haptics } from '../src/services/haptics';
+import { MIN_SESSIONS_FOR_INSIGHTS } from '../src/services/insights';
 import { Insight, InsightPeriod, InsightType, EmotionalSummary } from '../src/types';
 import { format } from 'date-fns';
 
@@ -203,15 +204,17 @@ function GeneratingState() {
 
 // Insufficient Data State
 function InsufficientDataState({ sessionCount }: { sessionCount: number }) {
+  const remaining = Math.max(MIN_SESSIONS_FOR_INSIGHTS - sessionCount, 0);
+  const subtitle =
+    sessionCount === 0
+      ? `Start journaling to discover patterns in your thoughts. ${remaining} more ${remaining === 1 ? 'session' : 'sessions'} to unlock insights.`
+      : `You have ${sessionCount} session${sessionCount === 1 ? '' : 's'}. ${remaining} more ${remaining === 1 ? 'session' : 'sessions'} to unlock insights.`;
+
   return (
     <Animated.View entering={FadeIn} style={styles.emptyContainer}>
       <Ionicons name="sparkles-outline" size={48} color={colors.textSecondary} />
       <Text style={styles.emptyTitle}>Keep talking, insights are on the way</Text>
-      <Text style={styles.emptySubtitle}>
-        {sessionCount === 0
-          ? 'Start journaling to discover patterns in your thoughts'
-          : `You have ${sessionCount} session${sessionCount === 1 ? '' : 's'}. A few more conversations and we'll spot some patterns.`}
-      </Text>
+      <Text style={styles.emptySubtitle}>{subtitle}</Text>
     </Animated.View>
   );
 }
@@ -254,7 +257,7 @@ function InsightsContent({ report }: InsightsContentProps) {
       {/* Insights */}
       {report.insights.length > 0 && (
         <>
-          <Text style={styles.sectionTitle}>What I noticed</Text>
+          <Text style={styles.sectionTitle}>What we noticed</Text>
           {report.insights.map((insight, index) => (
             <Animated.View
               key={insight.id}

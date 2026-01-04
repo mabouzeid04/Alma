@@ -174,7 +174,7 @@ export function useSession() {
       const relevantMemories = await ai.findRelevantMemories(
         transcription.text,
         allMemoriesRef.current,
-        3 // Top 3 most relevant memories
+        20 // Top 20 most relevant memories
       );
       console.log(`💭 Found ${relevantMemories.length} relevant memories`);
 
@@ -182,7 +182,7 @@ export function useSession() {
       const relevantMemoryVectors = await ai.findRelevantMemoryVectors(
         transcription.text,
         allMemoryVectorsRef.current,
-        5
+        30
       );
       console.log(`🧩 Found ${relevantMemoryVectors.length} memory snippets`);
 

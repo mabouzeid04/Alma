@@ -31,7 +31,7 @@ const SWIPE_THRESHOLD = 100;
 
 export default function HomeScreen() {
   const router = useRouter();
-  const { sessions } = useSessions();
+  const { sessions, loadSessions } = useSessions();
   const [userName] = useState(''); // Can be personalized later
   const translateY = useSharedValue(0);
 
@@ -77,8 +77,18 @@ export default function HomeScreen() {
     transform: [{ translateY: translateY.value }],
   }));
 
+  useEffect(() => {
+    // Reload sessions if E2E seed just ran
+    loadSessions();
+    const t = setTimeout(() => {
+      loadSessions();
+    }, 1000);
+    return () => clearTimeout(t);
+  }, [loadSessions]);
+
   const getGreetingMessage = () => {
-    const hour = new Date().getHours();
+    const fakeHour = (globalThis as any).__E2E_FAKE_HOUR__;
+    const hour = typeof fakeHour === 'number' ? fakeHour : new Date().getHours();
     const name = userName ? `, ${userName}` : '';
 
     if (hour >= 5 && hour < 12) return `Good morning${name}`;
@@ -89,9 +99,9 @@ export default function HomeScreen() {
 
   return (
     <GestureDetector gesture={panGesture}>
-      <View style={styles.container}>
+      <View style={styles.container} testID="home-screen">
         <SafeAreaView style={styles.safeArea}>
-          <Animated.View style={[styles.content, animatedStyle]}>
+          <Animated.View style={[styles.content, animatedStyle]} testID="home-gesture-area">
             {/* Header with Settings and Insights Buttons */}
             <Animated.View
               entering={FadeIn.delay(100).duration(500)}
@@ -104,23 +114,23 @@ export default function HomeScreen() {
                   pressed && styles.headerButtonPressed,
                 ]}
                 hitSlop={20}
+                accessibilityLabel="settings-button"
+                testID="home-settings-button"
               >
                 <Ionicons name="person-outline" size={22} color={colors.textSecondary} />
               </Pressable>
-              {sessionCount >= 3 ? (
-                <Pressable
-                  onPress={navigateToInsights}
-                  style={({ pressed }) => [
-                    styles.headerButton,
-                    pressed && styles.headerButtonPressed,
-                  ]}
-                  hitSlop={20}
-                >
-                  <Ionicons name="sparkles-outline" size={22} color={colors.textSecondary} />
-                </Pressable>
-              ) : (
-                <View style={styles.headerSpacer} />
-              )}
+              <Pressable
+                onPress={navigateToInsights}
+                style={({ pressed }) => [
+                  styles.headerButton,
+                  pressed && styles.headerButtonPressed,
+                ]}
+                hitSlop={20}
+                accessibilityLabel="insights-button"
+                testID="home-insights-button"
+              >
+                <Ionicons name="sparkles-outline" size={22} color={colors.textSecondary} />
+              </Pressable>
             </Animated.View>
 
             {/* Greeting - Top third */}
@@ -128,7 +138,9 @@ export default function HomeScreen() {
               entering={FadeIn.delay(100).duration(500)}
               style={styles.greetingContainer}
             >
-              <Text style={styles.greeting}>{getGreetingMessage()}</Text>
+              <Text style={styles.greeting} testID="home-greeting-text">
+                {getGreetingMessage()}
+              </Text>
             </Animated.View>
 
             {/* Pulsing Orb - Center */}
@@ -139,8 +151,12 @@ export default function HomeScreen() {
               <PulsingOrb
                 onPress={handleStartSession}
                 size={120}
+                accessibilityLabel="start-session"
+                testID="home-orb"
               />
-              <Text style={styles.hintText}>Tap to start talking</Text>
+              <Text style={styles.hintText} testID="home-hint-text">
+                Tap to start talking
+              </Text>
             </Animated.View>
 
             {/* Metadata - Bottom third */}
@@ -149,13 +165,13 @@ export default function HomeScreen() {
               style={styles.metadataContainer}
             >
               {sessionCount > 0 && (
-                <Text style={styles.metadataText}>
+                <Text style={styles.metadataText} testID="home-session-meta">
                   Session {sessionCount + 1}
                   {streak > 1 ? ` · ${streak} day streak` : ''}
                 </Text>
               )}
 
-              <Text style={styles.swipeHint}>
+              <Text style={styles.swipeHint} testID="home-swipe-hint">
                 ↑ Swipe up for history
               </Text>
             </Animated.View>

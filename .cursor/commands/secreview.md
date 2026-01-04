@@ -1,0 +1,3 @@
+Review the last 10 merged PRs for any security vulnerabilities or potential data leaks. Step through the PRs one at a time, checking out the codebase at the time the PR was merged. Once you are done with all of the PRs, report your findings. Do not write any code, and do not report your findings until you have reviewed all of the PRs.
+
+Remember: Be extremely thorough. No security vulnerabilities can slip through.

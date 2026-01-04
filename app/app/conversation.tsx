@@ -120,7 +120,7 @@ export default function ConversationScreen() {
 
   return (
     <View style={styles.container}>
-      <SafeAreaView style={styles.safeArea} edges={['top']}>
+      <SafeAreaView style={styles.safeArea} edges={['top']} testID="conversation-screen">
         {/* Header - Done button only */}
         <Animated.View entering={FadeIn} style={styles.header}>
           <View style={styles.headerSpacer} />

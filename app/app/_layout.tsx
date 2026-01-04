@@ -6,13 +6,29 @@ import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { StyleSheet } from 'react-native';
+import * as Linking from 'expo-linking';
 import { colors } from '../src/theme';
 import { getDatabase } from '../src/services/database';
+import { handleE2ELink } from '../src/services/e2e-bridge';
 
 export default function RootLayout() {
   useEffect(() => {
     // Initialize database on app start
     getDatabase();
+
+    // Handle E2E deep links for seeding/mocking
+    const applyInitialLink = async () => {
+      const initialUrl = await Linking.getInitialURL();
+      await handleE2ELink(initialUrl);
+    };
+
+    applyInitialLink();
+
+    const sub = Linking.addEventListener('url', ({ url }) => {
+      handleE2ELink(url);
+    });
+
+    return () => sub.remove();
   }, []);
 
   return (

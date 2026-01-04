@@ -1,6 +1,280 @@
-## System Overview – Changes vs origin/main
+# SecondBrain - System Overview
 
-Date: 2026-01-04
+## What is SecondBrain?
+
+SecondBrain is a voice-first journaling application built with React Native (Expo) that transforms spoken thoughts into structured, queryable knowledge through AI conversation. The core concept: voice journal entries become a persistent memory system that AI can reference across sessions, creating increasingly meaningful conversations over time.
+
+### Vision & Purpose
+
+The app solves a fundamental problem: AI agents need persistent, queryable knowledge about users to be genuinely useful. SecondBrain generates that knowledge through natural voice journaling, building a comprehensive database of thoughts, feelings, decisions, and experiences that grows with each conversation.
+
+**Success Criteria:**
+- Consistent usage (3+ times per week)
+- AI naturally surfaces relevant past context during conversations
+- Journal captures enough detail to be genuinely useful for future AI
+- Data is structured and portable
+
+**Non-Goals:**
+- Mood tracker with charts
+- Productivity system
+- Therapy replacement
+- Social platform
+
+## Core Features
+
+### 1. Voice-First Journaling
+- **Natural Conversation**: Talk through thoughts and feelings as if speaking to a thoughtful friend
+- **Real-Time Recording**: Audio capture with visual waveform feedback during recording
+- **Automatic Transcription**: ElevenLabs Scribe API converts speech to text
+- **AI-Powered Responses**: Gemini generates contextually aware responses with text-to-speech playback
+- **Session Management**: All conversations saved with full history and playback capabilities
+
+### 2. Four-Layer Memory System
+The app implements a sophisticated memory architecture that enables AI to understand and reference past context:
+
+**Layer 1: Raw Transcripts**
+- Full conversation history stored in SQLite
+- Never modified or deleted (source of truth)
+- Timestamped and linked to session metadata
+
+**Layer 2: Personal Knowledge Base**
+- Persistent facts about the user (biographical info, relationships, preferences, goals, habits)
+- Auto-extracted and updated after each session
+- Always loaded into AI context as baseline knowledge
+- Self-maintaining: AI reviews conversations for new/changed facts
+
+**Layer 3: Session Memory Nodes**
+- Structured summaries generated after each session containing:
+  - Key topics discussed
+  - Reflections and thoughts
+  - Emotional states
+  - Important events
+  - People mentioned and relationship dynamics
+  - Decisions made
+  - Unresolved questions
+- Stored as searchable JSON structures
+
+**Layer 4: Vector Embeddings**
+- Semantic search across all past sessions using Gemini text-embedding-004
+- Enables finding conceptually similar past conversations
+- Recency-weighted retrieval (60-day half-life, 0.7 similarity / 0.3 recency blend)
+- Granular memory vectors (chunks/highlights) with 500-character context snippets
+
+### 3. AI-Powered Insights
+- **Pattern Analysis**: Generates narrative insights from journal sessions (minimum 3 sessions required)
+- **Time Periods**: Weekly, monthly, and all-time views
+- **Insight Types**:
+  - Trends: Changes over time
+  - Patterns: Recurring themes or behaviors
+  - Growth: Positive progress or resolved issues
+  - Suggestions: Gentle observations
+  - Reflections: Topics worth thinking about
+- **Emotional Summaries**: Visualizes emotional trends and topic frequencies
+- **Smart Caching**: 24h cache for weekly, 72h for monthly, 168h for all-time insights
+
+### 4. Session History & Playback
+- Browse all past journal sessions
+- View session summaries with structured insights
+- Replay conversations with full message history
+- Direct navigation to specific sessions
+
+### 5. E2E Testing Infrastructure
+- Detox framework integration for iOS simulator testing
+- Database seeding functionality for test scenarios
+- Comprehensive test suite with automated workflows
+
+## Architecture
+
+### Technology Stack
+
+**Frontend:**
+- React Native with Expo
+- TypeScript for type safety
+- Expo Router for navigation (file-based routing)
+- Reanimated for smooth animations
+- expo-av and expo-audio for audio recording/playback
+
+**Backend Services:**
+- SQLite (expo-sqlite) for local data persistence
+- ElevenLabs API for speech-to-text (Scribe) and text-to-speech (eleven_turbo_v2_5)
+- Gemini API for AI conversation (gemini-3-flash-preview) and embeddings (text-embedding-004)
+- xAI (Grok) as alternative conversation model provider
+
+**Testing:**
+- Detox for E2E testing
+- Jest for unit testing
+- TypeScript with ts-jest
+
+### Directory Structure
+
+```
+app/
+├── app/                    # Screens (Expo Router with typed routes)
+│   ├── index.tsx          # Home screen with record button
+│   ├── conversation.tsx   # Active voice conversation UI
+│   ├── history.tsx        # Past sessions list
+│   ├── session/[id].tsx   # Session detail view
+│   ├── summary.tsx        # Session summary display
+│   ├── insights.tsx       # AI-powered insights modal
+│   ├── settings.tsx       # User preferences and configuration
+│   ├── processing.tsx     # Loading state during AI processing
+│   └── _layout.tsx        # Navigation structure and modals
+├── src/
+│   ├── components/        # UI components (RecordButton, MessageBubble, WaveformVisualizer, etc.)
+│   ├── hooks/             # React hooks (useSessions, useSession, useInsights)
+│   ├── services/          # Core business logic
+│   │   ├── ai.ts         # Voice AI, memory synthesis, embeddings
+│   │   ├── audio.ts      # Recording and playback via expo-av
+│   │   ├── database.ts   # SQLite operations and schema
+│   │   └── insights.ts   # Insights generation and caching
+│   ├── theme/             # Design system (colors, typography, spacing)
+│   └── types/             # TypeScript interfaces
+├── e2e/                   # End-to-end tests (Detox)
+└── scripts/               # Setup and maintenance scripts
+```
+
+### Database Schema
+
+SQLite database with the following tables:
+
+- **sessions**: Journal sessions with metadata (id, timestamp, title, duration)
+- **messages**: Conversation messages linked to sessions (id, sessionId, role, content, timestamp)
+- **memory_nodes**: Structured session summaries with embeddings (id, sessionId, summary, topics, emotions, events, people, thoughts, questions, embedding)
+- **memory_vectors**: Granular text chunks with embeddings for semantic search
+- **personal_facts**: Persistent user facts with active/inactive status (id, category, key, value, active, createdAt, updatedAt)
+- **insights_reports**: Cached insight reports by time period (id, period, generatedAt, emotionalSummary, topics, expiresAt)
+- **insights**: Individual insight entries (id, reportId, type, content, expiresAt)
+
+All tables auto-created on app initialization. No manual migrations needed.
+
+## Key User Flows
+
+### Starting a Journal Session
+1. User opens app and taps the record button on home screen
+2. App navigates to conversation screen
+3. AI greets user with time-appropriate opener
+4. User begins speaking (waveform visualizes audio levels)
+5. Speech transcribed in real-time via ElevenLabs
+6. AI generates response using:
+   - Personal knowledge base (always loaded)
+   - Top 3-5 most relevant past memory nodes (semantic search)
+   - Relevant memory vector snippets
+7. Response spoken via text-to-speech
+8. Conversation continues until user ends session
+
+### Ending a Session & Memory Synthesis
+1. User ends conversation
+2. App navigates to processing screen
+3. Background tasks execute:
+   - Memory synthesis: AI extracts structured insights (topics, emotions, events, people, thoughts, questions)
+   - Personal facts extraction/update: AI reviews conversation for new/changed persistent facts
+   - Vector embedding generation: Create embeddings for session summary and text chunks
+   - Database persistence: Save all data to SQLite
+4. User navigates to summary screen showing session insights
+5. Session appears in history list
+
+### Viewing Insights
+1. User taps sparkles icon on home screen (appears after 3+ sessions)
+2. Insights modal slides up from bottom
+3. Select time period (Week / Month / All Time)
+4. If cached and fresh, insights display immediately
+5. Otherwise, AI generates new insights report:
+   - Aggregates session data across period
+   - Identifies emotional trends, recurring themes, growth areas
+   - Generates narrative insights with specific types
+6. Display emotional summary, insight cards, and topic analysis
+7. User can refresh to regenerate insights
+
+## Screens & Navigation
+
+### Main Screens
+- **Home (index.tsx)**: Record button, quick access to history and insights
+- **Conversation (conversation.tsx)**: Active voice session with waveform visualization
+- **Processing (processing.tsx)**: Loading state during memory synthesis
+- **Summary (summary.tsx)**: Session summary with structured insights
+- **History (history.tsx)**: List of all past journal sessions
+- **Session Detail (session/[id].tsx)**: View specific session with full conversation
+
+### Modal Screens
+- **Insights (insights.tsx)**: AI-powered pattern analysis (slide from bottom)
+- **Settings (settings.tsx)**: User preferences and configuration
+
+## External Services
+
+### ElevenLabs API
+- **Speech-to-Text**: Scribe API for real-time transcription
+- **Text-to-Speech**: eleven_turbo_v2_5 model for natural AI voice
+- **Configuration**: API key and optional custom voice ID via environment variables
+
+### Gemini API
+- **Conversation**: gemini-3-flash-preview for AI responses
+- **Embeddings**: text-embedding-004 for semantic search (768-dimensional vectors)
+- **Insights**: gemini-2.0-flash for pattern analysis
+- **Configuration**: API key via environment variables
+
+### xAI (Grok)
+- **Alternative Model**: grok-4.1-fast-non-reasoning as configurable conversation provider
+- **Configuration**: Can be used instead of Gemini for primary conversation model
+
+## Design Philosophy
+
+### Conversation Tone
+The AI is designed to sound like a **thoughtful friend, not a therapist**. Key principles:
+
+- **Listen more than interrogate**: Let user finish thoughts before asking questions
+- **One question at a time**: Avoid question barrages
+- **Natural memory references**: "Didn't this happen before?" not "According to our conversation on..."
+- **Match user energy**: Casual or reflective based on user's tone
+- **Probe emotions and recurring themes**: Skip small logistics
+- **Conversational language**: "That sounds rough" not "I hear that you're experiencing frustration"
+
+### Visual Design
+- **Warm earth tones**: #F5F1E8 background, #E88D67 primary accent
+- **Clean typography**: System fonts with consistent hierarchy
+- **Smooth animations**: Reanimated for natural transitions
+- **Real-time feedback**: Waveform visualization during recording
+- **Card-based layouts**: Consistent styling across history and insights screens
+
+## Development & Configuration
+
+### Environment Variables
+See `app/.env.example` for complete list. Key variables:
+- `EXPO_PUBLIC_ELEVENLABS_API_KEY`: Required for speech services
+- `EXPO_PUBLIC_GEMINI_API_KEY`: Required for AI and embeddings
+- `EXPO_PUBLIC_ELEVENLABS_VOICE_ID`: Optional custom voice
+- Model provider and model selection for conversation, memory, knowledge, and insights
+
+### Common Commands
+```bash
+# Start development server
+cd app && npm start
+
+# Run on iOS simulator (press 'i' after start)
+# Run on Android emulator (press 'a' after start)
+
+# Clear cache if issues occur
+cd app && npx expo start -c
+
+# Type check
+cd app && npx tsc
+
+# E2E tests (iOS)
+npm run detox:build:ios
+npm run detox:test:ios
+```
+
+### Path Alias
+TypeScript configured with `@/*` mapping to `src/*` for cleaner imports:
+```typescript
+import { colors } from '@/theme'
+import { useSession } from '@/hooks'
+```
+
+---
+
+## Recent Changes & Development History
+
+Last Updated: 2026-01-04
 
 ### Recent Changes - January 4, 2026
 

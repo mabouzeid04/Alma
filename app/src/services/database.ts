@@ -1,9 +1,15 @@
 import * as SQLite from 'expo-sqlite';
+import { v4 as uuidv4 } from 'uuid';
 import { JournalSession, MemoryNode, MemoryVector, Message, Insight, InsightsReport, InsightPeriod } from '../types';
 
 const DATABASE_NAME = 'secondbrain.db';
 
 let db: SQLite.SQLiteDatabase | null = null;
+let e2eSeedApplied = false;
+let e2eSeedScenario: {
+  preset: 'empty' | 'single' | 'three' | 'streak3' | 'gap';
+  offsets?: number[];
+} | null = null;
 
 export async function getDatabase(): Promise<SQLite.SQLiteDatabase> {
   if (db) return db;
@@ -157,6 +163,7 @@ export async function getSession(id: string): Promise<JournalSession | null> {
 
 export async function getAllSessions(): Promise<JournalSession[]> {
   const database = await getDatabase();
+  await applyE2ESeedIfNeeded();
   const rows = await database.getAllAsync<any>(
     `SELECT * FROM sessions ORDER BY started_at DESC`
   );
@@ -181,6 +188,89 @@ export async function getAllSessions(): Promise<JournalSession[]> {
 export async function deleteSession(id: string): Promise<void> {
   const database = await getDatabase();
   await database.runAsync(`DELETE FROM sessions WHERE id = ?`, [id]);
+}
+
+export async function clearAllSessions(): Promise<void> {
+  const database = await getDatabase();
+  await database.execAsync(`
+    DELETE FROM messages;
+    DELETE FROM memory_nodes;
+    DELETE FROM memory_vectors;
+    DELETE FROM insights;
+    DELETE FROM insights_reports;
+    DELETE FROM sessions;
+    DELETE FROM personal_knowledge;
+  `);
+}
+
+export function setE2ESeedScenario(seed: typeof e2eSeedScenario): void {
+  e2eSeedScenario = seed;
+  e2eSeedApplied = false;
+}
+
+export async function applyE2ESeedIfNeeded(force = false): Promise<void> {
+  if (!e2eSeedScenario) return;
+  if (e2eSeedApplied && !force) return;
+
+  const scenario = e2eSeedScenario;
+  e2eSeedApplied = true;
+
+  const database = await getDatabase();
+  await database.execAsync('PRAGMA foreign_keys = ON;');
+
+  await clearAllSessions();
+
+  const sessions = buildSessionsFromScenario(scenario);
+  if (sessions.length > 0) {
+    await seedSessions(sessions);
+  }
+}
+
+function buildSessionsFromScenario(seed: NonNullable<typeof e2eSeedScenario>): JournalSession[] {
+  const now = new Date();
+  const offsets =
+    seed.offsets ??
+    (seed.preset === 'three' || seed.preset === 'streak3'
+      ? [0, 1, 2]
+      : seed.preset === 'gap'
+        ? [0, 2]
+        : seed.preset === 'single'
+          ? [0]
+          : []);
+
+  return offsets.map((daysAgo, idx) => {
+    const start = new Date(now);
+    start.setHours(10, 0, 0, 0);
+    start.setDate(start.getDate() - daysAgo);
+    const end = new Date(start.getTime() + 5 * 60 * 1000);
+    return {
+      id: `e2e-session-${idx}-${daysAgo}-${uuidv4()}`,
+      startedAt: start,
+      endedAt: end,
+      transcript: `E2E seed session ${idx}`,
+      duration: 300,
+      wordCount: 120,
+      messages: [],
+    };
+  });
+}
+
+export async function seedSessions(sessions: JournalSession[]): Promise<void> {
+  const database = await getDatabase();
+  for (const session of sessions) {
+    await database.runAsync(
+      `INSERT INTO sessions (id, started_at, ended_at, transcript, duration, word_count)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [
+        session.id,
+        session.startedAt.toISOString(),
+        session.endedAt?.toISOString() ?? null,
+        session.transcript,
+        session.duration,
+        session.wordCount,
+      ]
+    );
+  }
 }
 
 // Message operations

@@ -140,7 +140,7 @@ export default function HistoryScreen() {
   return (
     <GestureDetector gesture={panGesture}>
       <View style={styles.container}>
-        <SafeAreaView style={styles.safeArea} edges={['top']}>
+        <SafeAreaView style={styles.safeArea} edges={['top']} testID="history-screen">
           {/* Header */}
           <Animated.View entering={FadeIn} style={styles.header}>
             <Pressable

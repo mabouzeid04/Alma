@@ -45,7 +45,7 @@ const DEFAULT_MODELS = {
 };
 
 // Minimum sessions required to generate meaningful insights
-const MIN_SESSIONS_FOR_INSIGHTS = 3;
+export const MIN_SESSIONS_FOR_INSIGHTS = 3;
 
 // Cache freshness thresholds (in hours)
 const CACHE_FRESHNESS = {

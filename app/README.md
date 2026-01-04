@@ -86,3 +86,12 @@ Gemini embeddings for semantic search - finds similar past conversations based o
 - **Gemini 2.0 Flash** - Conversation AI, embeddings
 - **SQLite** - Local storage
 - **TypeScript** - Type safety
+
+## E2E testing (Detox, iOS)
+
+- Install deps (already in package.json): `npm install`
+- Build dev client for simulator: `npm run detox:build:ios`
+- Run tests (fresh app each run): `npm run detox:test:ios`
+- Reuse existing build and simulator state for faster cycles: `npm run detox:test:ios:reuse`
+- Simulator target: iPhone 15 (change in `.detoxrc.js` if needed)
+- Notes: requires Xcode + a booted simulator; microphone permission is pre-granted in `e2e/init.ts`
