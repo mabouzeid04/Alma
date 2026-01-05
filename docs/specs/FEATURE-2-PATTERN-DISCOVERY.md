@@ -22,6 +22,45 @@
 
 ---
 
+## Data Integrity Safeguards
+
+**This section addresses the risk of false patterns persisting based on incomplete information.**
+
+### Creation Thresholds
+
+Patterns are NOT created from sparse data. Requirements:
+- **Minimum 6 sessions** must mention the topic/pattern
+- **Minimum 4 weeks** span between first and most recent evidence
+- **Confidence score** starts at 0.5 and increases with more evidence
+
+This prevents premature pattern creation from a few off-hand mentions.
+
+### Contradiction Detection
+
+When new sessions contradict existing patterns:
+1. Pattern is flagged with `status: 'needs_review'`
+2. Counter-evidence is stored alongside the pattern
+3. User is notified in Settings → Patterns
+4. User decides: update pattern, keep as-is, or delete
+
+### Cascading Deletion
+
+When sessions are deleted:
+1. Pattern's `relatedSessions` array is updated to remove deleted session IDs
+2. If pattern has fewer than 3 remaining sessions, it's marked `status: 'insufficient_evidence'`
+3. If pattern has 0 remaining sessions, it's automatically deleted
+4. Patterns with insufficient evidence appear in Settings for user review
+
+### User Control
+
+Patterns are auto-generated but users have full control:
+- **Settings → Patterns** shows all patterns with confidence scores
+- Users can view evidence (linked sessions) for each pattern
+- Users can delete any pattern they disagree with
+- Contradictions are surfaced for manual resolution
+
+---
+
 ## Pattern Types
 
 The system tracks four types of patterns, stored as free-form narrative descriptions:
@@ -68,15 +107,30 @@ CREATE TABLE patterns (
   id TEXT PRIMARY KEY,
   pattern_type TEXT NOT NULL,  -- 'emotional_trend' | 'opinion_evolution' | 'relationship' | 'unresolved_question'
   description TEXT NOT NULL,   -- Free-form narrative describing the pattern
+  subject TEXT,                -- Optional: person name, topic, or question being tracked
+
+  -- Evidence tracking
   first_observed TEXT NOT NULL, -- ISO timestamp
   last_updated TEXT NOT NULL,   -- ISO timestamp
   related_sessions TEXT NOT NULL, -- JSON array of session IDs
-  still_relevant INTEGER DEFAULT 1, -- 0 = resolved/faded, 1 = active
-  subject TEXT  -- Optional: person name, topic, or question being tracked
+  evidence_quotes TEXT,         -- JSON array of supporting quotes from sessions
+
+  -- Confidence and status
+  confidence REAL DEFAULT 0.5,  -- 0.0 to 1.0, increases with evidence
+  status TEXT DEFAULT 'developing', -- 'developing' | 'active' | 'needs_review' | 'insufficient_evidence' | 'resolved'
+
+  -- Contradiction handling
+  counter_evidence TEXT,        -- JSON array of contradicting observations
+  contradiction_flagged_at TEXT, -- ISO timestamp when contradiction was detected
+
+  -- Lifecycle
+  created_at TEXT NOT NULL,
+  deleted_at TEXT               -- Soft delete for audit trail
 );
 
 CREATE INDEX idx_patterns_type ON patterns (pattern_type);
-CREATE INDEX idx_patterns_relevant ON patterns (still_relevant);
+CREATE INDEX idx_patterns_status ON patterns (status);
+CREATE INDEX idx_patterns_confidence ON patterns (confidence DESC);
 CREATE INDEX idx_patterns_updated ON patterns (last_updated DESC);
 ```
 
@@ -87,12 +141,33 @@ interface Pattern {
   id: string;
   patternType: 'emotional_trend' | 'opinion_evolution' | 'relationship' | 'unresolved_question';
   description: string;  // Free-form narrative
+  subject?: string;     // Person name, topic, or question
+
+  // Evidence
   firstObserved: Date;
   lastUpdated: Date;
   relatedSessions: string[];  // Session IDs
-  stillRelevant: boolean;
-  subject?: string;  // Person name, topic, or question
+  evidenceQuotes: string[];   // Supporting quotes
+
+  // Confidence and status
+  confidence: number;  // 0.0 to 1.0
+  status: 'developing' | 'active' | 'needs_review' | 'insufficient_evidence' | 'resolved';
+
+  // Contradiction handling
+  counterEvidence?: string[];  // Contradicting observations
+  contradictionFlaggedAt?: Date;
+
+  // Lifecycle
+  createdAt: Date;
+  deletedAt?: Date;  // Soft delete
 }
+
+type PatternStatus =
+  | 'developing'           // < 6 sessions, still gathering evidence
+  | 'active'               // 6+ sessions, confident pattern
+  | 'needs_review'         // Contradiction detected, user should review
+  | 'insufficient_evidence' // Sessions deleted, not enough evidence remaining
+  | 'resolved';            // User explicitly marked as no longer relevant
 ```
 
 ---
@@ -148,7 +223,7 @@ RECENT SESSIONS (past 2-3 months):
 [For each session: date, summary, emotions, key topics, people mentioned]
 
 EXISTING PATTERNS:
-[For each pattern: type, description, last updated, related sessions, still_relevant]
+[For each pattern: type, description, confidence, status, related sessions, evidence quotes]
 
 ---
 
@@ -178,6 +253,25 @@ Analyze the current session in context of the user's history. Look for:
 
 ---
 
+CRITICAL REQUIREMENTS:
+
+1. THRESHOLD FOR NEW PATTERNS:
+   - Do NOT create a new pattern unless it spans 6+ sessions over 4+ weeks
+   - Instead, note "potential_patterns" that are developing but not yet confirmed
+   - This prevents false patterns from limited data
+
+2. CONTRADICTION DETECTION:
+   - If the current session contradicts an existing pattern, flag it
+   - Include the specific contradiction and evidence
+   - Don't automatically update - flag for user review
+
+3. EVIDENCE QUALITY:
+   - Include direct quotes from sessions as evidence
+   - Quotes must actually appear in the session transcripts
+   - Each pattern needs at least 3 distinct quotes as evidence
+
+---
+
 OUTPUT FORMAT:
 
 Return a JSON object:
@@ -187,7 +281,17 @@ Return a JSON object:
       "type": "emotional_trend" | "opinion_evolution" | "relationship" | "unresolved_question",
       "description": "Detailed narrative description of the pattern with specific evidence",
       "subject": "optional - person name, topic, or question",
-      "evidence_sessions": ["session_id_1", "session_id_2"]
+      "evidence_sessions": ["session_id_1", "session_id_2", ...],  // Must be 6+ sessions
+      "evidence_quotes": ["exact quote 1", "exact quote 2", ...],  // Must be 3+ quotes
+      "time_span_weeks": 5  // Must be 4+ weeks
+    }
+  ],
+  "potential_patterns": [
+    {
+      "type": "...",
+      "description": "Pattern that's developing but doesn't meet threshold yet",
+      "evidence_sessions": ["..."],  // 2-5 sessions
+      "sessions_needed": 3  // How many more sessions needed to confirm
     }
   ],
   "updated_patterns": [
@@ -195,7 +299,16 @@ Return a JSON object:
       "pattern_id": "existing pattern ID",
       "new_description": "Updated narrative incorporating new evidence",
       "add_sessions": ["new session IDs to add"],
-      "still_relevant": true | false
+      "new_quotes": ["new supporting quotes"],
+      "confidence_change": 0.05  // How much to increase confidence (0.0 to 0.1)
+    }
+  ],
+  "contradicted_patterns": [
+    {
+      "pattern_id": "existing pattern ID",
+      "contradiction": "What in this session contradicts the pattern",
+      "evidence_quote": "The specific quote that contradicts",
+      "severity": "minor" | "major"  // Minor = could be temporary, Major = fundamentally contradicts
     }
   ],
   "resolved_patterns": [
@@ -208,10 +321,10 @@ Return a JSON object:
 
 GUIDELINES:
 - Be specific. Include quotes, dates, and concrete observations.
-- Don't create patterns from single mentions. Need 6+ sessions minimum.
-- Patterns should reveal something non-obvious - not just "user talked about work."
+- Quality over quantity. Only create patterns with strong evidence.
 - For opinion evolution, capture the SHIFT, not just current state.
 - If nothing notable, return empty arrays. Don't force patterns.
+- When in doubt about contradictions, flag for review rather than auto-updating.
 ```
 
 **Step 3: Parse and Apply**
@@ -235,8 +348,13 @@ async function detectAndUpdatePatterns(
   // Parse response
   const result = parsePatternResponse(response);
 
-  // Apply changes
+  // 1. Create new patterns (only if they meet threshold)
   for (const newPattern of result.new_patterns) {
+    // Validate threshold requirements
+    if (newPattern.evidence_sessions.length < 6) continue;
+    if (newPattern.time_span_weeks < 4) continue;
+    if (newPattern.evidence_quotes.length < 3) continue;
+
     await createPattern({
       id: uuid(),
       patternType: newPattern.type,
@@ -245,22 +363,81 @@ async function detectAndUpdatePatterns(
       firstObserved: new Date(),
       lastUpdated: new Date(),
       relatedSessions: newPattern.evidence_sessions,
-      stillRelevant: true,
+      evidenceQuotes: newPattern.evidence_quotes,
+      confidence: 0.6,  // Start at 0.6 since it passed threshold
+      status: 'active',
+      createdAt: new Date(),
     });
   }
 
+  // 2. Store potential patterns (developing, not yet confirmed)
+  for (const potential of result.potential_patterns) {
+    // Check if we already have a developing pattern for this subject
+    const existing = await findDevelopingPattern(potential.subject);
+    if (existing) {
+      await updatePattern(existing.id, {
+        relatedSessions: [...existing.relatedSessions, ...potential.evidence_sessions],
+        lastUpdated: new Date(),
+      });
+    } else {
+      await createPattern({
+        id: uuid(),
+        patternType: potential.type,
+        description: potential.description,
+        subject: potential.subject,
+        firstObserved: new Date(),
+        lastUpdated: new Date(),
+        relatedSessions: potential.evidence_sessions,
+        evidenceQuotes: [],
+        confidence: 0.3,
+        status: 'developing',  // Not yet active
+        createdAt: new Date(),
+      });
+    }
+  }
+
+  // 3. Update existing patterns with new evidence
   for (const update of result.updated_patterns) {
+    const existing = await getPattern(update.pattern_id);
+    if (!existing) continue;
+
+    const newConfidence = Math.min(0.95, existing.confidence + update.confidence_change);
+
     await updatePattern(update.pattern_id, {
       description: update.new_description,
       relatedSessions: [...existing.relatedSessions, ...update.add_sessions],
-      stillRelevant: update.still_relevant,
+      evidenceQuotes: [...existing.evidenceQuotes, ...update.new_quotes],
+      confidence: newConfidence,
       lastUpdated: new Date(),
     });
   }
 
+  // 4. Flag contradictions for user review
+  for (const contradiction of result.contradicted_patterns) {
+    const existing = await getPattern(contradiction.pattern_id);
+    if (!existing) continue;
+
+    const counterEvidence = existing.counterEvidence || [];
+    counterEvidence.push({
+      sessionId: session.id,
+      quote: contradiction.evidence_quote,
+      description: contradiction.contradiction,
+      severity: contradiction.severity,
+      detectedAt: new Date().toISOString(),
+    });
+
+    await updatePattern(contradiction.pattern_id, {
+      status: 'needs_review',
+      counterEvidence,
+      contradictionFlaggedAt: new Date(),
+      lastUpdated: new Date(),
+    });
+  }
+
+  // 5. Mark resolved patterns
   for (const resolved of result.resolved_patterns) {
     await updatePattern(resolved.pattern_id, {
-      stillRelevant: false,
+      status: 'resolved',
       lastUpdated: new Date(),
     });
   }
@@ -279,55 +456,248 @@ Add to `database.ts`:
 export async function createPattern(pattern: Pattern): Promise<void> {
   const database = await getDatabase();
   await database.runAsync(
-    `INSERT INTO patterns (id, pattern_type, description, first_observed, last_updated, related_sessions, still_relevant, subject)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO patterns (
+      id, pattern_type, description, subject,
+      first_observed, last_updated, related_sessions, evidence_quotes,
+      confidence, status, counter_evidence, contradiction_flagged_at,
+      created_at, deleted_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       pattern.id,
       pattern.patternType,
       pattern.description,
+      pattern.subject ?? null,
       pattern.firstObserved.toISOString(),
       pattern.lastUpdated.toISOString(),
       JSON.stringify(pattern.relatedSessions),
-      pattern.stillRelevant ? 1 : 0,
-      pattern.subject ?? null,
+      JSON.stringify(pattern.evidenceQuotes || []),
+      pattern.confidence,
+      pattern.status,
+      JSON.stringify(pattern.counterEvidence || []),
+      pattern.contradictionFlaggedAt?.toISOString() ?? null,
+      pattern.createdAt.toISOString(),
+      pattern.deletedAt?.toISOString() ?? null,
     ]
   );
-}
-
-export async function updatePattern(id: string, updates: Partial<Pattern>): Promise<void> {
-  // Build dynamic UPDATE query based on provided fields
-  // ...
-}
-
-export async function getAllPatterns(): Promise<Pattern[]> {
-  const database = await getDatabase();
-  const rows = await database.getAllAsync<any>(
-    `SELECT * FROM patterns ORDER BY last_updated DESC`
-  );
-  return rows.map(rowToPattern);
 }
 
 export async function getActivePatterns(): Promise<Pattern[]> {
   const database = await getDatabase();
   const rows = await database.getAllAsync<any>(
-    `SELECT * FROM patterns WHERE still_relevant = 1 ORDER BY last_updated DESC`
+    `SELECT * FROM patterns
+     WHERE status = 'active' AND deleted_at IS NULL
+     ORDER BY confidence DESC, last_updated DESC`
   );
   return rows.map(rowToPattern);
 }
 
-export async function getPatternsByType(type: Pattern['patternType']): Promise<Pattern[]> {
+export async function getPatternsNeedingReview(): Promise<Pattern[]> {
   const database = await getDatabase();
   const rows = await database.getAllAsync<any>(
-    `SELECT * FROM patterns WHERE pattern_type = ? AND still_relevant = 1 ORDER BY last_updated DESC`,
-    [type]
+    `SELECT * FROM patterns
+     WHERE status IN ('needs_review', 'insufficient_evidence') AND deleted_at IS NULL
+     ORDER BY contradiction_flagged_at DESC`
   );
   return rows.map(rowToPattern);
 }
 
-export async function getPatternsForSession(sessionId: string): Promise<Pattern[]> {
-  // Find patterns where related_sessions contains this session ID
-  const all = await getAllPatterns();
-  return all.filter(p => p.relatedSessions.includes(sessionId));
+export async function deletePattern(id: string): Promise<void> {
+  const database = await getDatabase();
+  // Soft delete for audit trail
+  await database.runAsync(
+    `UPDATE patterns SET deleted_at = ? WHERE id = ?`,
+    [new Date().toISOString(), id]
+  );
+}
+
+export async function hardDeletePattern(id: string): Promise<void> {
+  const database = await getDatabase();
+  await database.runAsync(`DELETE FROM patterns WHERE id = ?`, [id]);
+}
+```
+
+---
+
+## Session Deletion Cascade
+
+When a session is deleted, patterns that relied on it must be updated:
+
+```typescript
+// In database.ts - enhance deleteSession()
+
+export async function deleteSession(id: string): Promise<void> {
+  const database = await getDatabase();
+
+  // 1. Delete the session (cascades to messages, memory_nodes, memory_vectors)
+  await database.runAsync(`DELETE FROM sessions WHERE id = ?`, [id]);
+
+  // 2. Update all patterns that referenced this session
+  await updatePatternsAfterSessionDeletion(id);
+}
+
+async function updatePatternsAfterSessionDeletion(sessionId: string): Promise<void> {
+  const patterns = await getAllPatterns();
+
+  for (const pattern of patterns) {
+    if (!pattern.relatedSessions.includes(sessionId)) continue;
+
+    // Remove deleted session from evidence
+    const updatedSessions = pattern.relatedSessions.filter(s => s !== sessionId);
+    const remainingCount = updatedSessions.length;
+
+    if (remainingCount === 0) {
+      // No evidence left - delete the pattern
+      await hardDeletePattern(pattern.id);
+    } else if (remainingCount < 3) {
+      // Insufficient evidence - flag for review
+      await updatePattern(pattern.id, {
+        relatedSessions: updatedSessions,
+        status: 'insufficient_evidence',
+        confidence: Math.max(0.2, pattern.confidence - 0.2),
+        lastUpdated: new Date(),
+      });
+    } else {
+      // Still has enough evidence - just update the list
+      await updatePattern(pattern.id, {
+        relatedSessions: updatedSessions,
+        confidence: Math.max(0.3, pattern.confidence - 0.05),
+        lastUpdated: new Date(),
+      });
+    }
+  }
+}
+```
+
+---
+
+## Settings UI: Pattern Management
+
+Users can review and manage patterns in **Settings → Patterns**:
+
+### UI Layout
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  ← Settings                                                 │
+├─────────────────────────────────────────────────────────────┤
+│                                                             │
+│  Patterns                                                   │
+│                                                             │
+│  ⚠️ 2 patterns need your review                             │  ← Alert banner
+│                                                             │
+│  ────────────────────────────────────────────────────────── │
+│                                                             │
+│  NEEDS REVIEW                                               │
+│                                                             │
+│  ┌─────────────────────────────────────────────────────────┐│
+│  │ ⚠️ Work stress pattern                                  ││
+│  │                                                         ││
+│  │ "You get stressed about work deadlines"                 ││
+│  │                                                         ││
+│  │ Contradiction detected:                                 ││
+│  │ "Actually work has been great lately, I'm really       ││
+│  │ enjoying it" - Dec 28                                   ││
+│  │                                                         ││
+│  │ [Keep Pattern] [Update] [Delete]                        ││
+│  └─────────────────────────────────────────────────────────┘│
+│                                                             │
+│  ────────────────────────────────────────────────────────── │
+│                                                             │
+│  ACTIVE PATTERNS                                            │
+│                                                             │
+│  ┌─────────────────────────────────────────────────────────┐│
+│  │ Relationship: Sarah                          78% ████▒▒ ││
+│  │ "You talk about Sarah mostly in logistics contexts..." ││
+│  │ Based on 8 sessions                        [View] [🗑️]  ││
+│  └─────────────────────────────────────────────────────────┘│
+│                                                             │
+│  ┌─────────────────────────────────────────────────────────┐│
+│  │ Unresolved: Career change                    65% ███▒▒▒ ││
+│  │ "You keep mentioning wanting to switch careers..."     ││
+│  │ Based on 6 sessions                        [View] [🗑️]  ││
+│  └─────────────────────────────────────────────────────────┘│
+│                                                             │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### Pattern Detail View
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  ← Relationship: Sarah                                      │
+├─────────────────────────────────────────────────────────────┤
+│                                                             │
+│  "You talk about Sarah mostly in logistics contexts        │
+│  lately. Early mentions were more emotionally warm.        │
+│  You haven't discussed deeper connection in 3 weeks."      │
+│                                                             │
+│  ████████░░░░░░░░ 78% confident                            │
+│  First noticed: Oct 15 · 8 sessions                         │
+│                                                             │
+│  ────────────────────────────────────────────────────────── │
+│                                                             │
+│  Evidence                                                   │
+│                                                             │
+│  "Sarah and I are just coordinating schedules lately"      │
+│  Dec 20                                           [View →] │
+│                                                             │
+│  "We used to have date nights, now it's all logistics"     │
+│  Dec 12                                           [View →] │
+│                                                             │
+│  "I miss when we actually talked about stuff"              │
+│  Nov 28                                           [View →] │
+│                                                             │
+│  ────────────────────────────────────────────────────────── │
+│                                                             │
+│  [Delete This Pattern]                                      │
+│                                                             │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### Contradiction Resolution Flow
+
+When user taps a pattern needing review:
+
+1. Show the original pattern description
+2. Show the contradicting evidence with session link
+3. Options:
+   - **Keep Pattern** - Dismiss contradiction, pattern stays as-is
+   - **Update Pattern** - AI regenerates description incorporating new info
+   - **Delete Pattern** - Remove entirely
+
+```typescript
+async function resolveContradiction(
+  patternId: string,
+  action: 'keep' | 'update' | 'delete'
+): Promise<void> {
+  if (action === 'delete') {
+    await deletePattern(patternId);
+    return;
+  }
+
+  if (action === 'keep') {
+    // Clear contradiction flag, keep pattern
+    await updatePattern(patternId, {
+      status: 'active',
+      counterEvidence: [],
+      contradictionFlaggedAt: undefined,
+    });
+    return;
+  }
+
+  if (action === 'update') {
+    // Regenerate pattern description with all evidence including contradictions
+    const pattern = await getPattern(patternId);
+    const sessions = await getSessionsByIds(pattern.relatedSessions);
+    const newDescription = await regeneratePatternDescription(pattern, sessions);
+
+    await updatePattern(patternId, {
+      description: newDescription,
+      status: 'active',
+      counterEvidence: [],  // Incorporated into new description
+      contradictionFlaggedAt: undefined,
+    });
+  }
 }
 ```
 
@@ -433,14 +803,18 @@ const patterns = await getActivePatterns();
 ## Files to Create/Modify
 
 ### New Files
-- `app/src/services/patterns.ts` - Pattern detection and management
-- `app/src/types/patterns.ts` - Pattern type definitions (or add to existing types/index.ts)
+- `app/src/services/patterns.ts` - Pattern detection, management, and cascade logic
+- `app/app/patterns.tsx` - Settings UI for pattern management
+- `app/src/hooks/usePatterns.ts` - Hook for patterns screen state
+- `app/src/components/PatternCard.tsx` - Pattern display card
+- `app/src/components/ContradictionReview.tsx` - Contradiction resolution UI
 
 ### Modified Files
-- `app/src/services/database.ts` - Add patterns table and CRUD operations
-- `app/src/services/ai.ts` - Enhance system prompt with patterns
+- `app/src/services/database.ts` - Add patterns table, CRUD, and cascade deletion
+- `app/src/services/ai.ts` - Enhance system prompt with patterns (only active ones)
 - `app/app/conversation.tsx` - Call pattern detection after session ends
-- `app/src/types/index.ts` - Export Pattern type
+- `app/app/settings.tsx` - Add link to Patterns screen, show review badge
+- `app/src/types/index.ts` - Export Pattern type and related interfaces
 
 ---
 
@@ -500,22 +874,57 @@ const patterns = await getActivePatterns();
 
 After implementation:
 
-- [ ] Patterns are automatically detected after each session
-- [ ] Patterns are stored as rich narratives, not rigid categories
-- [ ] Opinion shifts are captured with before/after context
-- [ ] Unresolved questions are identified when mentioned 2+ times
-- [ ] Relationship patterns track how people are discussed over time
-- [ ] Patterns can be marked as resolved when no longer relevant
-- [ ] Pattern detection doesn't create noise - only meaningful patterns
+### Pattern Quality
+- [ ] Patterns only created with 6+ sessions over 4+ weeks (no premature patterns)
+- [ ] Patterns stored as rich narratives with evidence quotes
+- [ ] Opinion shifts captured with before/after context
+- [ ] Confidence scores accurately reflect evidence strength
+
+### Data Integrity
+- [ ] Contradictions detected and flagged for user review
+- [ ] Session deletion properly cascades to patterns
+- [ ] Patterns with insufficient evidence marked for review
+- [ ] No orphaned patterns (all have valid session references)
+
+### User Control
+- [ ] Settings → Patterns screen shows all patterns
+- [ ] Users can view evidence for each pattern
+- [ ] Users can delete patterns they disagree with
+- [ ] Contradiction resolution flow works (keep/update/delete)
+
+### System Behavior
+- [ ] Only `active` status patterns used in conversations
+- [ ] `developing` patterns not surfaced until confirmed
+- [ ] Pattern detection doesn't create noise
 
 ---
 
 ## Testing Approach
 
-1. **Manual testing with real usage** - Most important
-2. **Review generated patterns** - Are they specific? Non-obvious? Accurate?
-3. **Edge cases**:
-   - First session (no history) - should create no patterns
-   - Second session - might create patterns if related to first
-   - Pattern resolution - does it correctly mark patterns as resolved?
-4. **Performance** - Pattern detection shouldn't significantly slow down session end
+1. **Threshold testing**
+   - Sessions 1-5: No patterns should be created
+   - Session 6+ over 4 weeks: Pattern may be created if evidence is strong
+   - Verify `developing` status for patterns below threshold
+
+2. **Contradiction testing**
+   - Create a pattern, then add contradicting session
+   - Verify pattern status changes to `needs_review`
+   - Test all three resolution options (keep/update/delete)
+
+3. **Cascade deletion testing**
+   - Create pattern with 8 sessions
+   - Delete sessions one by one
+   - Verify confidence decreases
+   - Verify `insufficient_evidence` status when < 3 sessions
+   - Verify pattern deleted when 0 sessions remain
+
+4. **Settings UI testing**
+   - Verify patterns display correctly
+   - Verify evidence links work
+   - Verify delete action works
+   - Verify review badge shows correct count
+
+5. **Edge cases**
+   - First session (no patterns)
+   - User deletes all sessions (all patterns should be gone)
+   - Multiple patterns for same subject (should merge or distinguish)

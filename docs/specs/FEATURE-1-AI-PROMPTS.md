@@ -228,11 +228,14 @@ interface Prompt {
 async function generatePrompts(count: number = 5): Promise<Prompt[]> {
   // 1. Load context
   const sessions = await getRecentSessions(90); // 3 months
-  const patterns = await getActivePatterns();
   const existingPrompts = await getAllPrompts(); // To avoid duplicates
   const personalFacts = await getPersonalKnowledge();
 
-  // 2. Build prompt for LLM
+  // 2. Load ONLY confirmed patterns (active status, confidence >= 0.5)
+  // This prevents prompts from being generated based on false or unconfirmed patterns
+  const patterns = await getConfirmedPatterns();
+
+  // 3. Build prompt for LLM
   const prompt = buildPromptGenerationPrompt(
     sessions,
     patterns,
@@ -241,24 +244,43 @@ async function generatePrompts(count: number = 5): Promise<Prompt[]> {
     count
   );
 
-  // 3. Call LLM
+  // 4. Call LLM
   const response = await runPromptWithModel(prompt, modelPref, signal, {
     temperature: 0.7,  // Some creativity
     maxTokens: 2000,
   });
 
-  // 4. Parse and validate
+  // 5. Parse and validate
   const candidates = parsePromptResponse(response);
   const validated = validatePrompts(candidates, existingPrompts);
 
-  // 5. Save and return
+  // 6. Save and return
   for (const prompt of validated) {
     await savePrompt(prompt);
   }
 
   return validated;
 }
+
+// Only use patterns that have been confirmed (not developing or needs_review)
+async function getConfirmedPatterns(): Promise<Pattern[]> {
+  const patterns = await getActivePatterns(); // status = 'active'
+  return patterns.filter(p => p.confidence >= 0.5);
+}
 ```
+
+### Pattern Quality Gate
+
+Prompts should only be generated from **confirmed patterns** to prevent false patterns from corrupting the prompt experience:
+
+| Pattern Status | Confidence | Used for Prompts? |
+|----------------|------------|-------------------|
+| `developing` | any | No - not enough evidence |
+| `active` | < 0.5 | No - low confidence |
+| `active` | >= 0.5 | Yes |
+| `needs_review` | any | No - contradicted |
+| `insufficient_evidence` | any | No - sessions deleted |
+| `resolved` | any | No - no longer relevant |
 
 ### LLM Prompt
 

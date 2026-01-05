@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { JournalSession } from '../types';
 import * as database from '../services/database';
+import { updatePatternsAfterSessionDeletion } from '../services/patterns';
 
 export function useSessions() {
   const [sessions, setSessions] = useState<JournalSession[]>([]);
@@ -22,6 +23,9 @@ export function useSessions() {
 
   const deleteSession = useCallback(async (id: string) => {
     try {
+      // Update patterns to remove references to this session (cascade delete)
+      await updatePatternsAfterSessionDeletion(id);
+      // Delete the session itself
       await database.deleteSession(id);
       setSessions((prev) => prev.filter((s) => s.id !== id));
     } catch (err) {

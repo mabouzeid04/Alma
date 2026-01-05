@@ -112,27 +112,49 @@ The current system loads:
 
 ### New: Pattern Integration
 
+**IMPORTANT:** Only confirmed patterns should be used in conversation context to prevent false patterns from corrupting the AI's understanding.
+
 When loading context for a conversation:
 
 ```typescript
 // In useSession.ts startSession():
 
-// Load active patterns for context
-const activePatterns = await getActivePatterns();
+// Load ONLY confirmed patterns (active status + sufficient confidence)
+// This prevents false or unconfirmed patterns from being used
+const confirmedPatterns = await getConfirmedPatterns();
 
 // Store in ref for use during conversation
-activePatternsRef.current = activePatterns;
+activePatternsRef.current = confirmedPatterns;
+
+// Helper: Filter to confirmed patterns only
+async function getConfirmedPatterns(): Promise<Pattern[]> {
+  const patterns = await getActivePatterns(); // status = 'active'
+  return patterns.filter(p => p.confidence >= 0.5);
+}
 ```
+
+### Pattern Quality Gate
+
+Only patterns that have been sufficiently validated should influence conversations:
+
+| Pattern Status | Confidence | Used in Conversations? |
+|----------------|------------|------------------------|
+| `developing` | any | No - still gathering evidence |
+| `active` | < 0.5 | No - low confidence |
+| `active` | >= 0.5 | Yes |
+| `needs_review` | any | No - user should resolve first |
+| `insufficient_evidence` | any | No - not enough data |
+| `resolved` | any | No - no longer relevant |
 
 When generating a response:
 
 ```typescript
 // In stopRecording():
 
-// Find patterns relevant to current message
+// Find patterns relevant to current message (from pre-filtered confirmed patterns)
 const relevantPatterns = await getRelevantPatternsForContext(
   transcription.text,
-  activePatternsRef.current
+  activePatternsRef.current  // Already filtered to confirmed only
 );
 
 // Pass to generateResponse

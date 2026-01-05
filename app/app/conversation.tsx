@@ -8,7 +8,7 @@ import {
   Modal,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useRouter } from 'expo-router';
+import { useRouter, useLocalSearchParams } from 'expo-router';
 import Animated, {
   FadeIn,
   FadeInDown,
@@ -27,6 +27,7 @@ type WaveformState = 'idle' | 'speaking' | 'processing' | 'aiSpeaking';
 
 export default function ConversationScreen() {
   const router = useRouter();
+  const { promptId } = useLocalSearchParams<{ promptId?: string }>();
   const scrollViewRef = useRef<ScrollView>(null);
   const [showShortSessionModal, setShowShortSessionModal] = useState(false);
   const {
@@ -53,13 +54,13 @@ export default function ConversationScreen() {
   // Start session when screen mounts
   useEffect(() => {
     const initSession = async () => {
-      await startSession();
+      await startSession(promptId);
       // Greeting audio has finished, now start recording
       const started = await startRecording();
       console.log('Recording started:', started);
     };
     initSession();
-  }, []);
+  }, [promptId]);
 
   // Auto-scroll to bottom when new messages arrive
   useEffect(() => {

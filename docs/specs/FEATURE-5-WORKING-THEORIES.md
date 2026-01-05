@@ -57,6 +57,55 @@ Theories have confidence levels that change:
 
 ---
 
+## Data Integrity Safeguards
+
+**Theories require EVEN HIGHER thresholds than patterns** because they represent deeper claims about the user's psychology. False theories are more harmful than false patterns.
+
+### Creation Thresholds
+
+Theories can ONLY be created from confirmed patterns that meet strict criteria:
+- **Based on 2+ confirmed patterns** that cluster together
+- **Patterns must be 8+ weeks old** (not newly detected)
+- **Patterns must have 10+ sessions** of supporting evidence combined
+- **Theory confidence starts at 0.4** (lower than patterns since it's speculative)
+
+### Source Pattern Requirements
+
+Theories are only generated from patterns that are:
+- Status: `active` (not developing, needs_review, etc.)
+- Confidence: >= 0.6 (higher than conversation threshold)
+- Age: >= 8 weeks since first observed
+- Evidence: >= 6 sessions
+
+If the underlying patterns lose confidence or are deleted, the theory is automatically flagged for review.
+
+### Contradiction Handling
+
+When a session contradicts a theory:
+1. Theory confidence is reduced by 0.1-0.2 depending on severity
+2. If confidence drops below 0.3, theory is marked `questioning`
+3. User is NOT automatically notified (theories are background)
+4. If confidence stays below 0.3 for 4+ weeks, theory is auto-discarded
+
+### Cascading from Patterns
+
+If a pattern that supports a theory is:
+- **Deleted**: Theory loses that evidence, confidence reduced
+- **Marked needs_review**: Theory flagged for internal re-evaluation
+- **Contradicted**: Theory confidence reduced proportionally
+
+If all supporting patterns are invalidated, the theory is auto-discarded.
+
+### User Control
+
+Unlike patterns, theories are NOT shown prominently in Settings. They are:
+- Displayed in a "Deeper Patterns" section of Insights (optional)
+- Users can view and delete them if they navigate there
+- No notification when theories change
+- Theories should feel like "background understanding" not "profile data"
+
+---
+
 ## What Theories Look Like
 
 ### Example Theories

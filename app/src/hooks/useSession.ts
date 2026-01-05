@@ -1,9 +1,11 @@
 import { useState, useCallback, useRef } from 'react';
 import { v4 as uuid } from 'uuid';
-import { JournalSession, Message, ConversationState, MemoryNode, MemoryVector } from '../types';
+import { JournalSession, Message, ConversationState, MemoryNode, MemoryVector, Prompt } from '../types';
 import * as database from '../services/database';
 import * as audio from '../services/audio';
 import * as ai from '../services/ai';
+import { detectAndUpdatePatterns } from '../services/patterns';
+import { markPromptExplored, buildPromptSessionOpener } from '../services/prompts';
 import { haptics } from '../services/haptics';
 
 // Standalone function to process session memory (can be called from processing screen)
@@ -26,6 +28,11 @@ export async function processSessionMemory(session: JournalSession): Promise<voi
   const vectors = await ai.generateMemoryVectors(session, memoryNode);
   await database.saveMemoryVectors(vectors);
   console.log(`Memory vectors saved: ${vectors.length}`);
+
+  // Pattern Discovery: Detect and update patterns based on this session
+  console.log('Detecting patterns...');
+  await detectAndUpdatePatterns(session, memoryNode);
+  console.log('Pattern detection complete');
 }
 
 export function useSession() {
@@ -41,8 +48,14 @@ export function useSession() {
   const allMemoriesRef = useRef<MemoryNode[]>([]);
   const allMemoryVectorsRef = useRef<MemoryVector[]>([]);
 
-  // Start a new session
-  const startSession = useCallback(async () => {
+  // Start a new session (optionally from a prompt)
+  const startSession = useCallback(async (promptId?: string) => {
+    // Load prompt if provided
+    let prompt: Prompt | null = null;
+    if (promptId) {
+      prompt = await database.getPrompt(promptId);
+    }
+
     const session: JournalSession = {
       id: uuid(),
       startedAt: new Date(),
@@ -50,6 +63,7 @@ export function useSession() {
       duration: 0,
       wordCount: 0,
       messages: [],
+      sourcePromptId: promptId,
     };
 
     sessionStartTime.current = new Date();
@@ -83,8 +97,8 @@ export function useSession() {
     // Save session to database
     await database.createSession(session);
 
-    // Add initial AI greeting with TTS
-    const greeting = ai.getGreeting();
+    // Get opening message - use prompt opener if from prompt, otherwise default greeting
+    const greeting = prompt ? buildPromptSessionOpener(prompt) : ai.getGreeting();
 
     // Generate speech for greeting (don't await to avoid blocking)
     const greetingAudioPromise = ai.synthesizeSpeech(greeting);
@@ -253,6 +267,16 @@ export function useSession() {
 
     // Save final session state
     await database.updateSession(updatedSession);
+
+    // Mark prompt as explored if this session was started from a prompt
+    if (currentSession.sourcePromptId) {
+      try {
+        await markPromptExplored(currentSession.sourcePromptId, updatedSession.id);
+        console.log('Marked prompt as explored:', currentSession.sourcePromptId);
+      } catch (error) {
+        console.warn('Failed to mark prompt as explored:', error);
+      }
+    }
 
     // Store session ID for processing screen
     const sessionId = updatedSession.id;

@@ -27,6 +27,42 @@ Traditional approaches force unstructured conversation into rigid database schem
 
 ---
 
+## Data Integrity (Cross-Cutting Concern)
+
+**Problem:** False patterns can be created from incomplete information and persist indefinitely, corrupting the user's experience.
+
+**Solution:** Multiple safeguards across all features:
+
+### Pattern Creation Thresholds
+- **Minimum 6 sessions** must mention the topic/pattern
+- **Minimum 4 weeks** span between first and most recent evidence
+- Patterns below threshold are stored as `developing` status and not used in conversations
+
+### Contradiction Detection
+- When new sessions contradict existing patterns, flag for user review
+- User decides: keep pattern, update it, or delete it
+- Don't auto-update - let the user be the source of truth
+
+### Cascading Deletion
+- When sessions are deleted, update pattern evidence counts
+- If pattern has < 3 remaining sessions, mark as `insufficient_evidence`
+- If pattern has 0 remaining sessions, auto-delete
+
+### Settings UI: Pattern Management
+- **Settings → Patterns** shows all detected patterns
+- View confidence scores and evidence (linked sessions)
+- Review flagged contradictions
+- Delete any pattern you disagree with
+
+### Theory Safeguards (Feature 5)
+- Theories require EVEN HIGHER thresholds (10+ sessions, 8+ weeks)
+- Theories auto-decay if contradicted repeatedly
+- Theories are background understanding, not prominently displayed
+
+See individual feature specs in `docs/specs/` for detailed implementation.
+
+---
+
 ## Feature 1: AI-Generated Journaling Prompts
 
 **What It Is:**

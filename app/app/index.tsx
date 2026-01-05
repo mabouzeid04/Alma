@@ -59,6 +59,11 @@ export default function HomeScreen() {
     router.push('/settings');
   }, [router]);
 
+  const navigateToPrompts = useCallback(() => {
+    haptics.light();
+    router.push('/prompts' as any);
+  }, [router]);
+
   // Swipe up gesture for history
   const panGesture = Gesture.Pan()
     .onUpdate((event) => {
@@ -102,7 +107,7 @@ export default function HomeScreen() {
       <View style={styles.container} testID="home-screen">
         <SafeAreaView style={styles.safeArea}>
           <Animated.View style={[styles.content, animatedStyle]} testID="home-gesture-area">
-            {/* Header with Settings and Insights Buttons */}
+            {/* Header with Settings, Prompts, and Insights Buttons */}
             <Animated.View
               entering={FadeIn.delay(100).duration(500)}
               style={styles.headerContainer}
@@ -119,18 +124,32 @@ export default function HomeScreen() {
               >
                 <Ionicons name="person-outline" size={22} color={colors.textSecondary} />
               </Pressable>
-              <Pressable
-                onPress={navigateToInsights}
-                style={({ pressed }) => [
-                  styles.headerButton,
-                  pressed && styles.headerButtonPressed,
-                ]}
-                hitSlop={20}
-                accessibilityLabel="insights-button"
-                testID="home-insights-button"
-              >
-                <Ionicons name="sparkles-outline" size={22} color={colors.textSecondary} />
-              </Pressable>
+              <View style={styles.headerRightButtons}>
+                <Pressable
+                  onPress={navigateToPrompts}
+                  style={({ pressed }) => [
+                    styles.headerButton,
+                    pressed && styles.headerButtonPressed,
+                  ]}
+                  hitSlop={20}
+                  accessibilityLabel="prompts-button"
+                  testID="home-prompts-button"
+                >
+                  <Ionicons name="chatbubble-ellipses-outline" size={22} color={colors.textSecondary} />
+                </Pressable>
+                <Pressable
+                  onPress={navigateToInsights}
+                  style={({ pressed }) => [
+                    styles.headerButton,
+                    pressed && styles.headerButtonPressed,
+                  ]}
+                  hitSlop={20}
+                  accessibilityLabel="insights-button"
+                  testID="home-insights-button"
+                >
+                  <Ionicons name="sparkles-outline" size={22} color={colors.textSecondary} />
+                </Pressable>
+              </View>
             </Animated.View>
 
             {/* Greeting - Top third */}
@@ -226,6 +245,11 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
     paddingTop: spacing.sm,
+  },
+  headerRightButtons: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
   },
   headerSpacer: {
     width: 40,

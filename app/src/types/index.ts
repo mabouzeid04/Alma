@@ -15,6 +15,7 @@ export interface JournalSession {
   wordCount: number;
   messages: Message[];
   memoryNode?: MemoryNode;
+  sourcePromptId?: string;  // If started from a prompt
 }
 
 export interface MemoryNode {
@@ -99,4 +100,67 @@ export interface InsightsReport {
   insights: Insight[];
   emotionalSummary: EmotionalSummary;
   topicSummary: TopicSummary;
+}
+
+// Pattern Discovery types
+
+export type PatternType =
+  | 'emotional_trend'
+  | 'opinion_evolution'
+  | 'relationship'
+  | 'unresolved_question';
+
+export type PatternStatus =
+  | 'developing'           // < 6 sessions, still gathering evidence
+  | 'active'               // 6+ sessions, confident pattern
+  | 'needs_review'         // Contradiction detected, user should review
+  | 'insufficient_evidence' // Sessions deleted, not enough evidence remaining
+  | 'resolved';            // User explicitly marked as no longer relevant
+
+export interface PatternCounterEvidence {
+  sessionId: string;
+  quote: string;
+  description: string;
+  severity: 'minor' | 'major';
+  detectedAt: string;
+}
+
+export interface Pattern {
+  id: string;
+  patternType: PatternType;
+  description: string;  // Free-form narrative
+  subject?: string;     // Person name, topic, or question
+
+  // Evidence
+  firstObserved: Date;
+  lastUpdated: Date;
+  relatedSessions: string[];  // Session IDs
+  evidenceQuotes: string[];   // Supporting quotes
+
+  // Confidence and status
+  confidence: number;  // 0.0 to 1.0
+  status: PatternStatus;
+
+  // Contradiction handling
+  counterEvidence?: PatternCounterEvidence[];
+  contradictionFlaggedAt?: Date;
+
+  // Lifecycle
+  createdAt: Date;
+  deletedAt?: Date;  // Soft delete
+}
+
+// Prompt types
+
+export type PromptStatus = 'active' | 'explored' | 'dismissed' | 'expired';
+
+export interface Prompt {
+  id: string;
+  question: string;          // The actual prompt question
+  sourcePatternId?: string;  // Link to underlying pattern
+  relatedSessions: string[]; // Session IDs this is based on
+  status: PromptStatus;
+  exploredSessionId?: string;
+  createdAt: Date;
+  expiresAt: Date;
 }

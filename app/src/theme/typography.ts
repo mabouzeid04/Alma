@@ -1,10 +1,10 @@
 import { Platform } from 'react-native';
 
-// Use rounded system fonts for warm, friendly aesthetic
+// Use Crimson Text for warm, charming, thoughtful aesthetic
 const fontFamily = Platform.select({
-  ios: 'SF Pro Rounded',
-  android: 'Roboto',  // Android doesn't have rounded variant by default
-  default: 'System',
+  ios: 'CrimsonText',
+  android: 'CrimsonText',
+  default: 'CrimsonText',
 });
 
 const fontFamilyFallback = Platform.select({
@@ -17,49 +17,49 @@ export const typography = {
   // H1 - Home greeting
   h1: {
     fontFamily,
-    fontSize: 32,
+    fontSize: 34,
     fontWeight: '600' as const,
-    lineHeight: 40,
-    letterSpacing: -0.5,
+    lineHeight: 42,
+    letterSpacing: -0.3,
   },
   // H2 - Session detail titles, section headers
   h2: {
     fontFamily,
-    fontSize: 24,
-    fontWeight: '500' as const,
-    lineHeight: 30,
-    letterSpacing: -0.3,
+    fontSize: 26,
+    fontWeight: '600' as const,
+    lineHeight: 32,
+    letterSpacing: -0.2,
   },
   // Body Large - Transcript text, summaries
   bodyLarge: {
     fontFamily: fontFamilyFallback,
     fontSize: 18,
     fontWeight: '400' as const,
-    lineHeight: 28.8,  // 1.6 line height
-    letterSpacing: -0.2,
+    lineHeight: 30,  // Better for serif reading
+    letterSpacing: 0,
   },
   // Body - UI text
   body: {
     fontFamily: fontFamilyFallback,
     fontSize: 16,
     fontWeight: '400' as const,
-    lineHeight: 24,
-    letterSpacing: -0.2,
+    lineHeight: 26,
+    letterSpacing: 0,
   },
   // Body Semibold - Date/time headers
   bodySemibold: {
     fontFamily: fontFamilyFallback,
     fontSize: 16,
     fontWeight: '600' as const,
-    lineHeight: 24,
-    letterSpacing: -0.2,
+    lineHeight: 26,
+    letterSpacing: 0,
   },
   // Caption - Timestamps, metadata, hints
   caption: {
     fontFamily: fontFamilyFallback,
     fontSize: 14,
     fontWeight: '400' as const,
-    lineHeight: 20,
+    lineHeight: 22,
     letterSpacing: 0,
   },
   // Small - Tags
@@ -67,7 +67,7 @@ export const typography = {
     fontFamily: fontFamilyFallback,
     fontSize: 12,
     fontWeight: '400' as const,
-    lineHeight: 16,
+    lineHeight: 18,
     letterSpacing: 0,
   },
   // Legacy mappings for existing code compatibility

@@ -1,6 +1,6 @@
 import * as SQLite from 'expo-sqlite';
 import { v4 as uuidv4 } from 'uuid';
-import { JournalSession, MemoryNode, MemoryVector, Message, Insight, InsightsReport, InsightPeriod } from '../types';
+import { JournalSession, MemoryNode, MemoryVector, Message, Insight, InsightsReport, InsightPeriod, Pattern, PatternStatus, PatternType, PatternCounterEvidence, Prompt, PromptStatus } from '../types';
 
 const DATABASE_NAME = 'secondbrain.db';
 
@@ -29,7 +29,9 @@ async function initializeTables(): Promise<void> {
       ended_at TEXT,
       transcript TEXT DEFAULT '',
       duration REAL DEFAULT 0,
-      word_count INTEGER DEFAULT 0
+      word_count INTEGER DEFAULT 0,
+      source_prompt_id TEXT,
+      FOREIGN KEY (source_prompt_id) REFERENCES prompts (id)
     );
 
     CREATE TABLE IF NOT EXISTS messages (
@@ -104,6 +106,45 @@ async function initializeTables(): Promise<void> {
     CREATE INDEX IF NOT EXISTS idx_insights_reports_period ON insights_reports (period);
     CREATE INDEX IF NOT EXISTS idx_insights_reports_generated_at ON insights_reports (generated_at DESC);
     CREATE INDEX IF NOT EXISTS idx_insights_report ON insights (report_id);
+
+    CREATE TABLE IF NOT EXISTS patterns (
+      id TEXT PRIMARY KEY,
+      pattern_type TEXT NOT NULL,
+      description TEXT NOT NULL,
+      subject TEXT,
+      first_observed TEXT NOT NULL,
+      last_updated TEXT NOT NULL,
+      related_sessions TEXT NOT NULL,
+      evidence_quotes TEXT,
+      confidence REAL DEFAULT 0.5,
+      status TEXT DEFAULT 'developing',
+      counter_evidence TEXT,
+      contradiction_flagged_at TEXT,
+      created_at TEXT NOT NULL,
+      deleted_at TEXT
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_patterns_type ON patterns (pattern_type);
+    CREATE INDEX IF NOT EXISTS idx_patterns_status ON patterns (status);
+    CREATE INDEX IF NOT EXISTS idx_patterns_confidence ON patterns (confidence DESC);
+    CREATE INDEX IF NOT EXISTS idx_patterns_updated ON patterns (last_updated DESC);
+
+    CREATE TABLE IF NOT EXISTS prompts (
+      id TEXT PRIMARY KEY,
+      question TEXT NOT NULL,
+      source_pattern_id TEXT,
+      related_sessions TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'active',
+      explored_session_id TEXT,
+      created_at TEXT NOT NULL,
+      expires_at TEXT NOT NULL,
+      FOREIGN KEY (source_pattern_id) REFERENCES patterns (id),
+      FOREIGN KEY (explored_session_id) REFERENCES sessions (id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_prompts_status ON prompts (status);
+    CREATE INDEX IF NOT EXISTS idx_prompts_created ON prompts (created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_prompts_expires ON prompts (expires_at);
   `);
 }
 
@@ -111,8 +152,8 @@ async function initializeTables(): Promise<void> {
 export async function createSession(session: JournalSession): Promise<void> {
   const database = await getDatabase();
   await database.runAsync(
-    `INSERT INTO sessions (id, started_at, ended_at, transcript, duration, word_count)
-     VALUES (?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO sessions (id, started_at, ended_at, transcript, duration, word_count, source_prompt_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
     [
       session.id,
       session.startedAt.toISOString(),
@@ -120,6 +161,7 @@ export async function createSession(session: JournalSession): Promise<void> {
       session.transcript,
       session.duration,
       session.wordCount,
+      session.sourcePromptId ?? null,
     ]
   );
 }
@@ -158,6 +200,7 @@ export async function getSession(id: string): Promise<JournalSession | null> {
     duration: row.duration,
     wordCount: row.word_count,
     messages,
+    sourcePromptId: row.source_prompt_id ?? undefined,
   };
 }
 
@@ -179,6 +222,7 @@ export async function getAllSessions(): Promise<JournalSession[]> {
       duration: row.duration,
       wordCount: row.word_count,
       messages,
+      sourcePromptId: row.source_prompt_id ?? undefined,
     });
   }
 
@@ -198,6 +242,8 @@ export async function clearAllSessions(): Promise<void> {
     DELETE FROM memory_vectors;
     DELETE FROM insights;
     DELETE FROM insights_reports;
+    DELETE FROM patterns;
+    DELETE FROM prompts;
     DELETE FROM sessions;
     DELETE FROM personal_knowledge;
   `);
@@ -483,6 +529,7 @@ export async function getSessionsInDateRange(
       duration: row.duration,
       wordCount: row.word_count,
       messages,
+      sourcePromptId: row.source_prompt_id ?? undefined,
     });
   }
 
@@ -624,4 +671,362 @@ export async function clearAllInsights(): Promise<void> {
   const database = await getDatabase();
   await database.runAsync(`DELETE FROM insights`);
   await database.runAsync(`DELETE FROM insights_reports`);
+}
+
+// Pattern operations
+
+function rowToPattern(row: any): Pattern {
+  return {
+    id: row.id,
+    patternType: row.pattern_type as PatternType,
+    description: row.description,
+    subject: row.subject ?? undefined,
+    firstObserved: new Date(row.first_observed),
+    lastUpdated: new Date(row.last_updated),
+    relatedSessions: JSON.parse(row.related_sessions || '[]'),
+    evidenceQuotes: JSON.parse(row.evidence_quotes || '[]'),
+    confidence: row.confidence ?? 0.5,
+    status: (row.status ?? 'developing') as PatternStatus,
+    counterEvidence: row.counter_evidence ? JSON.parse(row.counter_evidence) : undefined,
+    contradictionFlaggedAt: row.contradiction_flagged_at ? new Date(row.contradiction_flagged_at) : undefined,
+    createdAt: new Date(row.created_at),
+    deletedAt: row.deleted_at ? new Date(row.deleted_at) : undefined,
+  };
+}
+
+export async function createPattern(pattern: Pattern): Promise<void> {
+  const database = await getDatabase();
+  await database.runAsync(
+    `INSERT INTO patterns (
+      id, pattern_type, description, subject,
+      first_observed, last_updated, related_sessions, evidence_quotes,
+      confidence, status, counter_evidence, contradiction_flagged_at,
+      created_at, deleted_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      pattern.id,
+      pattern.patternType,
+      pattern.description,
+      pattern.subject ?? null,
+      pattern.firstObserved.toISOString(),
+      pattern.lastUpdated.toISOString(),
+      JSON.stringify(pattern.relatedSessions),
+      JSON.stringify(pattern.evidenceQuotes || []),
+      pattern.confidence,
+      pattern.status,
+      JSON.stringify(pattern.counterEvidence || []),
+      pattern.contradictionFlaggedAt?.toISOString() ?? null,
+      pattern.createdAt.toISOString(),
+      pattern.deletedAt?.toISOString() ?? null,
+    ]
+  );
+}
+
+export async function updatePattern(
+  id: string,
+  updates: Partial<Omit<Pattern, 'id' | 'createdAt'>>
+): Promise<void> {
+  const database = await getDatabase();
+
+  // Get current pattern
+  const existing = await getPattern(id);
+  if (!existing) return;
+
+  // Build update query dynamically
+  const fields: string[] = [];
+  const values: any[] = [];
+
+  if (updates.description !== undefined) {
+    fields.push('description = ?');
+    values.push(updates.description);
+  }
+  if (updates.subject !== undefined) {
+    fields.push('subject = ?');
+    values.push(updates.subject);
+  }
+  if (updates.lastUpdated !== undefined) {
+    fields.push('last_updated = ?');
+    values.push(updates.lastUpdated.toISOString());
+  }
+  if (updates.relatedSessions !== undefined) {
+    fields.push('related_sessions = ?');
+    values.push(JSON.stringify(updates.relatedSessions));
+  }
+  if (updates.evidenceQuotes !== undefined) {
+    fields.push('evidence_quotes = ?');
+    values.push(JSON.stringify(updates.evidenceQuotes));
+  }
+  if (updates.confidence !== undefined) {
+    fields.push('confidence = ?');
+    values.push(updates.confidence);
+  }
+  if (updates.status !== undefined) {
+    fields.push('status = ?');
+    values.push(updates.status);
+  }
+  if (updates.counterEvidence !== undefined) {
+    fields.push('counter_evidence = ?');
+    values.push(JSON.stringify(updates.counterEvidence));
+  }
+  if (updates.contradictionFlaggedAt !== undefined) {
+    fields.push('contradiction_flagged_at = ?');
+    values.push(updates.contradictionFlaggedAt?.toISOString() ?? null);
+  }
+  if (updates.deletedAt !== undefined) {
+    fields.push('deleted_at = ?');
+    values.push(updates.deletedAt?.toISOString() ?? null);
+  }
+
+  if (fields.length === 0) return;
+
+  values.push(id);
+  await database.runAsync(
+    `UPDATE patterns SET ${fields.join(', ')} WHERE id = ?`,
+    values
+  );
+}
+
+export async function getPattern(id: string): Promise<Pattern | null> {
+  const database = await getDatabase();
+  const row = await database.getFirstAsync<any>(
+    `SELECT * FROM patterns WHERE id = ?`,
+    [id]
+  );
+  if (!row) return null;
+  return rowToPattern(row);
+}
+
+export async function getAllPatterns(): Promise<Pattern[]> {
+  const database = await getDatabase();
+  const rows = await database.getAllAsync<any>(
+    `SELECT * FROM patterns WHERE deleted_at IS NULL ORDER BY last_updated DESC`
+  );
+  return rows.map(rowToPattern);
+}
+
+export async function getActivePatterns(): Promise<Pattern[]> {
+  const database = await getDatabase();
+  const rows = await database.getAllAsync<any>(
+    `SELECT * FROM patterns
+     WHERE status = 'active' AND deleted_at IS NULL
+     ORDER BY confidence DESC, last_updated DESC`
+  );
+  return rows.map(rowToPattern);
+}
+
+export async function getDevelopingPatterns(): Promise<Pattern[]> {
+  const database = await getDatabase();
+  const rows = await database.getAllAsync<any>(
+    `SELECT * FROM patterns
+     WHERE status = 'developing' AND deleted_at IS NULL
+     ORDER BY last_updated DESC`
+  );
+  return rows.map(rowToPattern);
+}
+
+export async function getPatternsNeedingReview(): Promise<Pattern[]> {
+  const database = await getDatabase();
+  const rows = await database.getAllAsync<any>(
+    `SELECT * FROM patterns
+     WHERE status IN ('needs_review', 'insufficient_evidence') AND deleted_at IS NULL
+     ORDER BY contradiction_flagged_at DESC`
+  );
+  return rows.map(rowToPattern);
+}
+
+export async function getPatternsByType(type: PatternType): Promise<Pattern[]> {
+  const database = await getDatabase();
+  const rows = await database.getAllAsync<any>(
+    `SELECT * FROM patterns
+     WHERE pattern_type = ? AND deleted_at IS NULL
+     ORDER BY confidence DESC, last_updated DESC`,
+    [type]
+  );
+  return rows.map(rowToPattern);
+}
+
+export async function findPatternBySubject(subject: string): Promise<Pattern | null> {
+  const database = await getDatabase();
+  const row = await database.getFirstAsync<any>(
+    `SELECT * FROM patterns
+     WHERE subject = ? AND deleted_at IS NULL
+     ORDER BY confidence DESC
+     LIMIT 1`,
+    [subject]
+  );
+  if (!row) return null;
+  return rowToPattern(row);
+}
+
+export async function findDevelopingPatternBySubject(subject: string): Promise<Pattern | null> {
+  const database = await getDatabase();
+  const row = await database.getFirstAsync<any>(
+    `SELECT * FROM patterns
+     WHERE subject = ? AND status = 'developing' AND deleted_at IS NULL
+     LIMIT 1`,
+    [subject]
+  );
+  if (!row) return null;
+  return rowToPattern(row);
+}
+
+export async function deletePattern(id: string): Promise<void> {
+  const database = await getDatabase();
+  // Soft delete for audit trail
+  await database.runAsync(
+    `UPDATE patterns SET deleted_at = ? WHERE id = ?`,
+    [new Date().toISOString(), id]
+  );
+}
+
+export async function hardDeletePattern(id: string): Promise<void> {
+  const database = await getDatabase();
+  await database.runAsync(`DELETE FROM patterns WHERE id = ?`, [id]);
+}
+
+export async function clearAllPatterns(): Promise<void> {
+  const database = await getDatabase();
+  await database.runAsync(`DELETE FROM patterns`);
+}
+
+// Prompt operations
+
+function rowToPrompt(row: any): Prompt {
+  return {
+    id: row.id,
+    question: row.question,
+    sourcePatternId: row.source_pattern_id ?? undefined,
+    relatedSessions: JSON.parse(row.related_sessions || '[]'),
+    status: (row.status ?? 'active') as PromptStatus,
+    exploredSessionId: row.explored_session_id ?? undefined,
+    createdAt: new Date(row.created_at),
+    expiresAt: new Date(row.expires_at),
+  };
+}
+
+export async function createPrompt(prompt: Prompt): Promise<void> {
+  const database = await getDatabase();
+  await database.runAsync(
+    `INSERT INTO prompts (
+      id, question, source_pattern_id, related_sessions,
+      status, explored_session_id, created_at, expires_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      prompt.id,
+      prompt.question,
+      prompt.sourcePatternId ?? null,
+      JSON.stringify(prompt.relatedSessions),
+      prompt.status,
+      prompt.exploredSessionId ?? null,
+      prompt.createdAt.toISOString(),
+      prompt.expiresAt.toISOString(),
+    ]
+  );
+}
+
+export async function updatePrompt(
+  id: string,
+  updates: Partial<Omit<Prompt, 'id' | 'createdAt'>>
+): Promise<void> {
+  const database = await getDatabase();
+
+  const fields: string[] = [];
+  const values: any[] = [];
+
+  if (updates.question !== undefined) {
+    fields.push('question = ?');
+    values.push(updates.question);
+  }
+  if (updates.status !== undefined) {
+    fields.push('status = ?');
+    values.push(updates.status);
+  }
+  if (updates.exploredSessionId !== undefined) {
+    fields.push('explored_session_id = ?');
+    values.push(updates.exploredSessionId);
+  }
+  if (updates.expiresAt !== undefined) {
+    fields.push('expires_at = ?');
+    values.push(updates.expiresAt.toISOString());
+  }
+
+  if (fields.length === 0) return;
+
+  values.push(id);
+  await database.runAsync(
+    `UPDATE prompts SET ${fields.join(', ')} WHERE id = ?`,
+    values
+  );
+}
+
+export async function getPrompt(id: string): Promise<Prompt | null> {
+  const database = await getDatabase();
+  const row = await database.getFirstAsync<any>(
+    `SELECT * FROM prompts WHERE id = ?`,
+    [id]
+  );
+  if (!row) return null;
+  return rowToPrompt(row);
+}
+
+export async function getActivePrompts(): Promise<Prompt[]> {
+  const database = await getDatabase();
+  const rows = await database.getAllAsync<any>(
+    `SELECT * FROM prompts
+     WHERE status = 'active'
+     ORDER BY created_at DESC`
+  );
+  return rows.map(rowToPrompt);
+}
+
+export async function getAllPrompts(): Promise<Prompt[]> {
+  const database = await getDatabase();
+  const rows = await database.getAllAsync<any>(
+    `SELECT * FROM prompts ORDER BY created_at DESC`
+  );
+  return rows.map(rowToPrompt);
+}
+
+export async function getExpiredPrompts(): Promise<Prompt[]> {
+  const database = await getDatabase();
+  const now = new Date().toISOString();
+  const rows = await database.getAllAsync<any>(
+    `SELECT * FROM prompts
+     WHERE status = 'active' AND expires_at < ?
+     ORDER BY created_at DESC`,
+    [now]
+  );
+  return rows.map(rowToPrompt);
+}
+
+export async function markExpiredPrompts(): Promise<number> {
+  const database = await getDatabase();
+  const now = new Date().toISOString();
+  const result = await database.runAsync(
+    `UPDATE prompts SET status = 'expired'
+     WHERE status = 'active' AND expires_at < ?`,
+    [now]
+  );
+  return result.changes;
+}
+
+export async function deleteOldPrompts(daysOld: number): Promise<number> {
+  const database = await getDatabase();
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - daysOld);
+  const result = await database.runAsync(
+    `DELETE FROM prompts WHERE created_at < ? AND status != 'active'`,
+    [cutoff.toISOString()]
+  );
+  return result.changes;
+}
+
+export async function deletePrompt(id: string): Promise<void> {
+  const database = await getDatabase();
+  await database.runAsync(`DELETE FROM prompts WHERE id = ?`, [id]);
+}
+
+export async function clearAllPrompts(): Promise<void> {
+  const database = await getDatabase();
+  await database.runAsync(`DELETE FROM prompts`);
 }
