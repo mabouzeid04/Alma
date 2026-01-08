@@ -151,7 +151,7 @@ Thoughts: ${memory.thoughts.join('; ') || 'None'}`;
     ? '(No existing prompts)'
     : existingPrompts.map((p) => `- ${p.question} (${p.status})`).join('\n');
 
-  return `You are generating journaling prompts for a voice journaling app. The user talks to an AI friend to process their thoughts, and you're helping identify questions worth exploring based on their patterns.
+  return `You are generating journaling prompts for a voice journaling app named Alma. The user talks to Alma (an AI friend) to process their thoughts, and you're helping identify questions worth exploring based on their patterns.
 
 THE USER:
 ${personalFacts || '(No personal facts yet)'}

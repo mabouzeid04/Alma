@@ -13,7 +13,7 @@ import Animated, {
 } from 'react-native-reanimated';
 import { colors } from '../theme';
 
-type WaveformState = 'idle' | 'speaking' | 'processing' | 'aiSpeaking';
+type WaveformState = 'idle' | 'speaking' | 'transcribing' | 'processing' | 'aiSpeaking';
 
 interface WaveformVisualizerProps {
   state: WaveformState;
@@ -22,14 +22,14 @@ interface WaveformVisualizerProps {
   audioLevel?: number;
 }
 
-// Warm gradient colors for particles
+// Golden Wood gradient colors for particles
 const particleColors = [
-  colors.primary,      // Warm Orange #E88D67
-  colors.primaryLight, // Soft Peach #F4B59F
-  '#D4A574',           // Warm Tan
-  '#E8A87C',           // Peachy Orange
-  colors.primaryLight, // Soft Peach
-  colors.primary,      // Warm Orange
+  colors.primary,      // Golden Wood (Raw Sienna)
+  colors.primaryLight, // Pale Walnut
+  '#7F5539',           // Antique Oak
+  '#A07855',           // Raw Sienna
+  colors.primaryLight, // Pale Walnut
+  colors.primary,      // Golden Wood
 ];
 
 export function WaveformVisualizer({
@@ -181,6 +181,77 @@ function Particle({ particle, state, containerSize, audioLevel }: ParticleProps)
     } else if (state === 'speaking') {
       // Initial state for speaking - will be updated by audioLevel
       opacity.value = withTiming(0.8, { duration: 200 });
+    } else if (state === 'transcribing') {
+      // Orbital swirling inward - speech being converted to text
+      const orbitRadius = maxRadius * 0.3 * particle.baseRadius;
+      const orbitDuration = 1200 / particle.speed;
+
+      // Particles orbit around center with staggered rotation
+      translateX.value = withDelay(
+        delay,
+        withRepeat(
+          withSequence(
+            withTiming(Math.cos(particle.angle) * orbitRadius, {
+              duration: orbitDuration,
+              easing: Easing.inOut(Easing.sin),
+            }),
+            withTiming(Math.cos(particle.angle + Math.PI / 2) * orbitRadius * 0.85, {
+              duration: orbitDuration,
+              easing: Easing.inOut(Easing.sin),
+            }),
+            withTiming(Math.cos(particle.angle + Math.PI) * orbitRadius * 0.7, {
+              duration: orbitDuration,
+              easing: Easing.inOut(Easing.sin),
+            }),
+            withTiming(Math.cos(particle.angle + Math.PI * 1.5) * orbitRadius * 0.85, {
+              duration: orbitDuration,
+              easing: Easing.inOut(Easing.sin),
+            })
+          ),
+          -1,
+          false
+        )
+      );
+
+      translateY.value = withDelay(
+        delay,
+        withRepeat(
+          withSequence(
+            withTiming(Math.sin(particle.angle) * orbitRadius, {
+              duration: orbitDuration,
+              easing: Easing.inOut(Easing.sin),
+            }),
+            withTiming(Math.sin(particle.angle + Math.PI / 2) * orbitRadius * 0.85, {
+              duration: orbitDuration,
+              easing: Easing.inOut(Easing.sin),
+            }),
+            withTiming(Math.sin(particle.angle + Math.PI) * orbitRadius * 0.7, {
+              duration: orbitDuration,
+              easing: Easing.inOut(Easing.sin),
+            }),
+            withTiming(Math.sin(particle.angle + Math.PI * 1.5) * orbitRadius * 0.85, {
+              duration: orbitDuration,
+              easing: Easing.inOut(Easing.sin),
+            })
+          ),
+          -1,
+          false
+        )
+      );
+
+      // Gentle pulse while orbiting
+      scale.value = withRepeat(
+        withSequence(
+          withTiming(1.0, { duration: orbitDuration, easing: Easing.inOut(Easing.sin) }),
+          withTiming(0.8, { duration: orbitDuration, easing: Easing.inOut(Easing.sin) }),
+          withTiming(0.9, { duration: orbitDuration, easing: Easing.inOut(Easing.sin) }),
+          withTiming(0.85, { duration: orbitDuration, easing: Easing.inOut(Easing.sin) })
+        ),
+        -1,
+        false
+      );
+
+      opacity.value = withTiming(0.7, { duration: 200 });
     } else if (state === 'processing') {
       // Pulsing inward/outward - thinking state
       const pulseRadius = maxRadius * 0.25 * particle.baseRadius;

@@ -1,11 +1,11 @@
 {
   "expo": {
-    "name": "Second Brain",
-    "slug": "secondbrain",
+    "name": "Alma",
+    "slug": "alma",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
-    "scheme": "secondbrain",
+    "scheme": "alma",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "splash": {
@@ -15,9 +15,9 @@
     },
     "ios": {
       "supportsTablet": false,
-      "bundleIdentifier": "com.secondbrain.app",
+      "bundleIdentifier": "com.alma.app",
       "infoPlist": {
-        "NSMicrophoneUsageDescription": "Second Brain needs microphone access to record your voice journal entries."
+        "NSMicrophoneUsageDescription": "Alma needs microphone access to record your voice journal entries."
       }
     },
     "android": {
@@ -28,7 +28,7 @@
       "permissions": [
         "RECORD_AUDIO"
       ],
-      "package": "com.secondbrain.app",
+      "package": "com.alma.app",
       "edgeToEdgeEnabled": true
     },
     "plugins": [
@@ -42,7 +42,7 @@
       [
         "expo-audio",
         {
-          "microphonePermission": "Second Brain needs microphone access to record your voice journal entries."
+          "microphonePermission": "Alma needs microphone access to record your voice journal entries."
         }
       ]
     ],

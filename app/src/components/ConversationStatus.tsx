@@ -8,6 +8,7 @@ interface ConversationStatusProps {
 }
 
 export function ConversationStatus({ state }: ConversationStatusProps) {
+
   const getStatusConfig = () => {
     switch (state) {
       case 'listening':
@@ -72,3 +73,4 @@ const styles = StyleSheet.create({
     fontWeight: '500',
   },
 });
+

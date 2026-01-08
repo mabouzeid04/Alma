@@ -1,12 +1,12 @@
 const sharp = require('sharp');
 const path = require('path');
 
-// App colors
+// App colors - Golden Wood (Raw Sienna) Palette
 const COLORS = {
   background: '#F5F1E8',     // Beige
-  primary: '#E88D67',        // Warm Orange
-  primaryLight: '#F4B59F',   // Soft Peach
-  primaryDark: '#D67A54',    // Darker orange
+  primary: '#A07855',        // Golden Wood (Raw Sienna)
+  primaryLight: '#BFAFA0',   // Pale Walnut
+  primaryDark: '#5C3D2E',    // Dark Roast
 };
 
 async function generateIcon() {

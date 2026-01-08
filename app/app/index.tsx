@@ -170,7 +170,6 @@ export default function HomeScreen() {
               <PulsingOrb
                 onPress={handleStartSession}
                 size={120}
-                accessibilityLabel="start-session"
                 testID="home-orb"
               />
               <Text style={styles.hintText} testID="home-hint-text">

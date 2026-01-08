@@ -40,7 +40,7 @@ export const shadows = {
     elevation: 2,
   },
   orb: {
-    shadowColor: '#E88D67',
+    shadowColor: '#A07855',
     shadowOffset: { width: 0, height: 8 },
     shadowOpacity: 0.3,
     shadowRadius: 24,

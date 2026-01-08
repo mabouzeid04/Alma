@@ -16,9 +16,17 @@ import {
   EmotionalSummary,
   TopicSummary,
   EmotionTrend,
+  InsightEvidence,
+  InsightConnection,
+  GrowthIndicator,
+  GrowthDirection,
+  GrowthSnapshot,
+  Pattern,
+  JournalSession,
 } from '../types';
 import * as database from './database';
 import { subDays, subMonths, format } from 'date-fns';
+import { getConfirmedPatterns } from './patterns';
 import { fetchWithRetry, createTimeoutController } from './api-utils';
 
 // =============================================================================
@@ -151,8 +159,8 @@ async function generateInsightsReport(
   }
 
   try {
-    // Prepare data for AI analysis
-    const analysisData = prepareAnalysisData(memoryNodes, period);
+    // Prepare data for AI analysis (now async to load patterns)
+    const analysisData = await prepareAnalysisData(memoryNodes, period);
 
     // Generate insights using AI
     const aiResponse = await callInsightsAI(analysisData);
@@ -176,7 +184,9 @@ interface AnalysisData {
   periodLabel: string;
   sessionCount: number;
   sessions: {
+    id: string;
     date: string;
+    dateISO: string;
     summary: string;
     topics: string[];
     emotions: string[];
@@ -185,9 +195,16 @@ interface AnalysisData {
     thoughts: string[];
     unresolvedQuestions: string[];
   }[];
+  patterns: {
+    type: string;
+    description: string;
+    subject?: string;
+    sessionCount: number;
+    confidence: number;
+  }[];
 }
 
-function prepareAnalysisData(memoryNodes: MemoryNode[], period: InsightPeriod): AnalysisData {
+async function prepareAnalysisData(memoryNodes: MemoryNode[], period: InsightPeriod): Promise<AnalysisData> {
   const periodLabels: Record<InsightPeriod, string> = {
     week: 'the past week',
     month: 'the past month',
@@ -195,7 +212,9 @@ function prepareAnalysisData(memoryNodes: MemoryNode[], period: InsightPeriod): 
   };
 
   const sessions = memoryNodes.map((node) => ({
+    id: node.sessionId,
     date: format(node.createdAt, 'MMM d, yyyy'),
+    dateISO: node.createdAt.toISOString().split('T')[0],
     summary: node.summary,
     topics: node.topics,
     emotions: node.emotions,
@@ -205,21 +224,37 @@ function prepareAnalysisData(memoryNodes: MemoryNode[], period: InsightPeriod): 
     unresolvedQuestions: node.unresolvedQuestions,
   }));
 
+  // Load confirmed patterns for deeper analysis
+  let patterns: AnalysisData['patterns'] = [];
+  try {
+    const confirmedPatterns = await getConfirmedPatterns();
+    patterns = confirmedPatterns.map((p) => ({
+      type: p.patternType,
+      description: p.description,
+      subject: p.subject,
+      sessionCount: p.relatedSessions.length,
+      confidence: p.confidence,
+    }));
+  } catch (error) {
+    console.warn('Failed to load patterns for insights:', error);
+  }
+
   return {
     period,
     periodLabel: periodLabels[period],
     sessionCount: memoryNodes.length,
     sessions,
+    patterns,
   };
 }
 
 // Helper functions
 function inferProviderFromModelName(model?: string): ModelProvider {
   const normalized = (model || '').toLowerCase();
-  if (normalized.includes('grok') || normalized.includes('xai')) return 'xai';
+  if (normalized.includes('gemini')) return 'gemini';
   if (normalized.includes('gpt') || normalized.includes('openai') || normalized.includes('o1') || normalized.includes('5'))
     return 'openai';
-  return 'gemini';
+  return 'xai';
 }
 
 function resolveInsightsModelPreference(): { provider: ModelProvider; model: string } {
@@ -228,9 +263,9 @@ function resolveInsightsModelPreference(): { provider: ModelProvider; model: str
     INSIGHTS_MODEL ||
     (provider === 'openai'
       ? DEFAULT_MODELS.openai
-      : provider === 'xai'
-      ? DEFAULT_MODELS.xai
-      : DEFAULT_MODELS.gemini);
+      : provider === 'gemini'
+      ? DEFAULT_MODELS.gemini
+      : DEFAULT_MODELS.xai);
 
   return { provider, model };
 }
@@ -244,13 +279,13 @@ async function callInsightsAI(data: AnalysisData): Promise<string | null> {
       return await callOpenAI(prompt, modelPref.model);
     }
 
-    if (modelPref.provider === 'xai' && XAI_API_KEY) {
-      return await callXAI(prompt, modelPref.model);
+    if (modelPref.provider === 'gemini' && GEMINI_API_KEY) {
+      return await callGemini(prompt, modelPref.model);
     }
 
-    // Default to Gemini
-    if (GEMINI_API_KEY) {
-      return await callGemini(prompt, modelPref.provider === 'gemini' ? modelPref.model : DEFAULT_MODELS.gemini);
+    // Default to xAI (Grok)
+    if (XAI_API_KEY) {
+      return await callXAI(prompt, modelPref.provider === 'xai' ? modelPref.model : DEFAULT_MODELS.xai);
     }
 
     console.error('No API key available for insights');
@@ -258,13 +293,13 @@ async function callInsightsAI(data: AnalysisData): Promise<string | null> {
   } catch (error) {
     console.error('Error calling insights AI:', error);
 
-    // Fallback to Gemini if primary fails
-    if (modelPref.provider !== 'gemini' && GEMINI_API_KEY) {
+    // Fallback to Grok if primary fails
+    if (modelPref.provider !== 'xai' && XAI_API_KEY) {
       try {
-        console.log('Falling back to Gemini for insights');
-        return await callGemini(prompt, DEFAULT_MODELS.gemini);
+        console.log('Falling back to Grok for insights');
+        return await callXAI(prompt, DEFAULT_MODELS.xai);
       } catch (fallbackError) {
-        console.error('Gemini fallback failed:', fallbackError);
+        console.error('Grok fallback failed:', fallbackError);
       }
     }
 
@@ -273,7 +308,7 @@ async function callInsightsAI(data: AnalysisData): Promise<string | null> {
 }
 
 async function callGemini(prompt: string, model: string): Promise<string | null> {
-  const { controller, timeoutId } = createTimeoutController();
+  const { controller, timeoutId } = createTimeoutController(10000); // 60s timeout for insights
 
   try {
     const response = await fetchWithRetry(
@@ -311,7 +346,7 @@ async function callGemini(prompt: string, model: string): Promise<string | null>
 }
 
 async function callOpenAI(prompt: string, model: string): Promise<string | null> {
-  const { controller, timeoutId } = createTimeoutController();
+  const { controller, timeoutId } = createTimeoutController(10000); // 60s timeout for insights
 
   try {
     const response = await fetchWithRetry(`${OPENAI_API_URL}/chat/completions`, {
@@ -345,7 +380,7 @@ async function callOpenAI(prompt: string, model: string): Promise<string | null>
 }
 
 async function callXAI(prompt: string, model: string): Promise<string | null> {
-  const { controller, timeoutId } = createTimeoutController();
+  const { controller, timeoutId } = createTimeoutController(10000); // 60s timeout for insights
 
   try {
     const response = await fetchWithRetry(`${XAI_API_URL}/chat/completions`, {
@@ -379,11 +414,11 @@ async function callXAI(prompt: string, model: string): Promise<string | null> {
 }
 
 function buildInsightsPrompt(data: AnalysisData): string {
-  // Format all sessions with their raw data
+  // Format all sessions with their raw data, including session IDs for evidence linking
   const sessionsText = data.sessions
     .map(
       (s) => `
-[${s.date}]
+[${s.date}] (Session ID: ${s.id})
 Summary: ${s.summary}
 Topics: ${s.topics.join(', ') || 'none'}
 Emotions: ${s.emotions.join(', ') || 'none'}
@@ -394,44 +429,135 @@ Unresolved questions: ${s.unresolvedQuestions.join('; ') || 'none'}`
     )
     .join('\n');
 
-  return `You are a thoughtful friend helping someone understand patterns in their voice journal over ${data.periodLabel}.
+  // Format existing patterns if any
+  const patternsText = data.patterns.length > 0
+    ? `\nEXISTING DETECTED PATTERNS:\n${data.patterns.map((p) =>
+        `- [${p.type}] ${p.subject ? `${p.subject}: ` : ''}${p.description} (${p.sessionCount} sessions, ${Math.round(p.confidence * 100)}% confidence)`
+      ).join('\n')}`
+    : '';
 
-Here are all ${data.sessionCount} journal sessions from this period. Read through them and identify meaningful patterns, trends, and insights.
+  return `You are analyzing someone's voice journal to find NON-OBVIOUS insights - the kind of observations a person wouldn't notice about themselves.
 
+JOURNAL SESSIONS FROM ${data.periodLabel.toUpperCase()} (${data.sessionCount} sessions):
 ${sessionsText}
+${patternsText}
 
-Based on these sessions, generate insights that sound like observations from a caring friend, NOT analytical reports. Focus on:
-- Emotional patterns (getting better/worse/staying the same?)
-- Recurring themes and topics
-- Growth and progress
-- Relationships and how people show up
-- Lingering questions or unresolved threads
-- Notice similar emotions/topics even if worded differently (e.g., "anxious" and "anxiety", "work" and "job")
+---
 
-Return a JSON object with this structure:
+YOUR TASK: Find insights that will make the user think "I didn't realize that!" Focus on:
+
+1. **NON-OBVIOUS CONNECTIONS** (type: "connection")
+   - Correlations they wouldn't notice: "You feel most anxious on Sunday evenings thinking about the work week"
+   - Hidden triggers: "Every time you mention your girlfriend, you also seem stressed about school - are they connected?"
+   - Temporal patterns: times of day/week when certain emotions appear
+   - Co-occurrences: topics/people that always appear together
+
+2. **BLIND SPOTS** (type: "blind_spot")
+   - Things mentioned repeatedly WITHOUT action: "You've mentioned feeling disconnected from friends 4 times but haven't talked about reaching out"
+   - Avoided topics: things mentioned once then dropped, or topics that seem important but rarely explored
+   - Unresolved questions that keep coming up without progress
+
+3. **GROWTH & CHANGE** (type: "growth")
+   - Topics that have RESOLVED or faded (positive growth)
+   - Emotional shifts: "You were anxious about X for weeks, now you seem settled"
+   - New concerns emerging
+   - Include BEFORE and AFTER comparison
+
+4. **TRENDS WITH EVIDENCE** (type: "trend")
+   - NOT just "you were stressed this week" but "your stress about work has been building over the past month"
+   - Include SPECIFIC quotes from sessions as evidence
+   - Link to the actual sessions that show this
+
+5. **PATTERNS & REFLECTIONS** (type: "pattern" or "reflection")
+   - Only when genuinely interesting observations
+
+---
+
+CRITICAL REQUIREMENTS:
+- Include DIRECT QUOTES from the sessions as evidence (use the actual words from summaries/thoughts)
+- Reference SPECIFIC session IDs for each insight
+- For connections, specify WHAT is correlated with WHAT
+- For growth, include BEFORE state and AFTER state
+- Sound like a caring friend, not an analyst
+- Quality over quantity: 4-6 deep insights beats 10 shallow ones
+
+---
+
+OUTPUT FORMAT (return ONLY this JSON):
 {
   "insights": [
     {
-      "type": "trend|pattern|growth|suggestion|reflection",
-      "title": "Friendly headline (5-8 words)",
-      "narrative": "2-3 sentences like a friend noticing something",
+      "type": "connection|blind_spot|growth|trend|pattern|reflection",
+      "title": "Short headline (5-10 words)",
+      "narrative": "2-4 sentences explaining this insight like a friend would. Be specific, not generic.",
       "priority": "high|medium|low",
-      "sessionDates": ["dates of relevant sessions"]
+      "evidence": [
+        {
+          "sessionId": "actual session ID from above",
+          "sessionDate": "YYYY-MM-DD",
+          "quote": "Direct quote or paraphrase from that session",
+          "context": "Brief context (optional)"
+        }
+      ],
+      "connection": {
+        "items": ["item1", "item2"],
+        "correlationType": "co_occurrence|trigger|temporal|contrast",
+        "strength": "strong|moderate|emerging"
+      },
+      "growthIndicator": {
+        "topic": "what changed",
+        "before": "how it was before",
+        "after": "how it is now",
+        "direction": "improving|declining|resolved|new",
+        "timespan": "over what period"
+      }
     }
   ],
   "emotionalSummary": {
-    "dominantEmotions": ["top 3 emotions you noticed"],
+    "dominantEmotions": ["top 3 emotions"],
     "trend": "improving|stable|declining|mixed",
-    "trendNarrative": "Brief observation about emotional patterns"
+    "trendNarrative": "Brief observation about emotional trajectory"
   },
   "topicSummary": {
-    "recurringTopics": ["themes mentioned multiple times"],
-    "emergingTopics": ["newer themes that appeared recently"],
-    "resolvedTopics": ["themes that seem resolved or dropped"]
+    "recurringTopics": ["themes mentioned 2+ times"],
+    "emergingTopics": ["new themes appearing recently"],
+    "resolvedTopics": ["themes that seem settled or dropped"]
+  },
+  "growthSnapshot": {
+    "resolved": ["concerns that have faded or been addressed"],
+    "improving": ["areas showing positive change"],
+    "newConcerns": ["recently emerged worries or focus areas"],
+    "stagnant": ["things mentioned repeatedly without progress"]
   }
 }
 
-Generate 3-5 insights. Return only valid JSON.`;
+NOTES:
+- "connection" and "growthIndicator" fields are OPTIONAL - only include when relevant to that insight type
+- For "connection" type insights, the "connection" field is REQUIRED
+- For "growth" type insights, the "growthIndicator" field is REQUIRED
+- Include "evidence" array for ALL insight types with at least 1-2 supporting quotes
+- Be specific about session dates and IDs - don't guess or make them up`;
+}
+
+interface AIEvidenceResponse {
+  sessionId: string;
+  sessionDate: string;
+  quote: string;
+  context?: string;
+}
+
+interface AIConnectionResponse {
+  items: string[];
+  correlationType: 'co_occurrence' | 'trigger' | 'temporal' | 'contrast';
+  strength: 'strong' | 'moderate' | 'emerging';
+}
+
+interface AIGrowthIndicatorResponse {
+  topic: string;
+  before: string;
+  after: string;
+  direction: 'improving' | 'declining' | 'resolved' | 'new';
+  timespan: string;
 }
 
 interface AIInsightResponse {
@@ -440,7 +566,10 @@ interface AIInsightResponse {
     title: string;
     narrative: string;
     priority: InsightPriority;
-    sessionDates: string[];
+    sessionDates?: string[]; // Legacy field for backwards compatibility
+    evidence?: AIEvidenceResponse[];
+    connection?: AIConnectionResponse;
+    growthIndicator?: AIGrowthIndicatorResponse;
   }[];
   emotionalSummary: {
     dominantEmotions: string[];
@@ -451,6 +580,12 @@ interface AIInsightResponse {
     recurringTopics: string[];
     emergingTopics: string[];
     resolvedTopics: string[];
+  };
+  growthSnapshot?: {
+    resolved: string[];
+    improving: string[];
+    newConcerns: string[];
+    stagnant: string[];
   };
 }
 
@@ -470,22 +605,72 @@ function parseAIResponse(
     const parsed: AIInsightResponse = JSON.parse(jsonMatch[0]);
     const now = new Date();
 
+    // Build a map of session IDs to memory nodes for validation
+    const sessionIdToNode = new Map<string, MemoryNode>();
+    memoryNodes.forEach((node) => sessionIdToNode.set(node.sessionId, node));
+
     // Convert AI response to InsightsReport
-    const insights: Insight[] = (parsed.insights || []).map((insight, index) => ({
-      id: uuid(),
-      type: insight.type || 'reflection',
-      title: insight.title || 'Observation',
-      narrative: insight.narrative || '',
-      supportingData: {
-        sessionsReferenced: findReferencedSessionIds(insight.sessionDates, memoryNodes),
-        timePeriod: getPeriodLabel(period),
-        metrics: {},
-      },
-      priority: insight.priority || 'medium',
-      generatedAt: now,
-      expiresAt: getExpirationDate(period, now),
-      period,
-    }));
+    const insights: Insight[] = (parsed.insights || []).map((insight) => {
+      // Process evidence - validate session IDs and convert dates
+      const evidence: InsightEvidence[] = (insight.evidence || [])
+        .filter((e) => e.sessionId && sessionIdToNode.has(e.sessionId))
+        .map((e) => {
+          const node = sessionIdToNode.get(e.sessionId);
+          return {
+            sessionId: e.sessionId,
+            sessionDate: node?.createdAt || new Date(e.sessionDate || now),
+            quote: e.quote || '',
+            context: e.context,
+          };
+        });
+
+      // Get session IDs from evidence, or fall back to legacy sessionDates field
+      const sessionsReferenced = evidence.length > 0
+        ? evidence.map((e) => e.sessionId)
+        : findReferencedSessionIds(insight.sessionDates || [], memoryNodes);
+
+      // Process connection if present
+      let connection: InsightConnection | undefined;
+      if (insight.connection && insight.connection.items?.length >= 2) {
+        connection = {
+          items: insight.connection.items,
+          correlationType: insight.connection.correlationType || 'co_occurrence',
+          strength: insight.connection.strength || 'moderate',
+        };
+      }
+
+      // Process growth indicator if present
+      let growthIndicator: GrowthIndicator | undefined;
+      if (insight.growthIndicator && insight.growthIndicator.topic) {
+        growthIndicator = {
+          topic: insight.growthIndicator.topic,
+          before: insight.growthIndicator.before || '',
+          after: insight.growthIndicator.after || '',
+          direction: insight.growthIndicator.direction || 'improving',
+          timespan: insight.growthIndicator.timespan || getPeriodLabel(period),
+        };
+      }
+
+      return {
+        id: uuid(),
+        type: insight.type || 'reflection',
+        title: insight.title || 'Observation',
+        narrative: insight.narrative || '',
+        supportingData: {
+          sessionsReferenced,
+          timePeriod: getPeriodLabel(period),
+          metrics: {},
+        },
+        priority: insight.priority || 'medium',
+        generatedAt: now,
+        expiresAt: getExpirationDate(period, now),
+        period,
+        // Enhanced fields
+        evidence: evidence.length > 0 ? evidence : undefined,
+        connection,
+        growthIndicator,
+      };
+    });
 
     // Build emotion counts from memory nodes
     const emotionCounts: Record<string, number> = {};
@@ -517,6 +702,8 @@ function parseAIResponse(
       insights,
       emotionalSummary,
       topicSummary,
+      // Include growth snapshot if provided
+      growthSnapshot: parsed.growthSnapshot,
     };
   } catch (error) {
     console.error('Error parsing AI response:', error);

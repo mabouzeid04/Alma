@@ -17,7 +17,7 @@ import Animated, {
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { Ionicons } from '@expo/vector-icons';
 import { format } from 'date-fns';
-import { colors, spacing, typography, borderRadius } from '../src/theme';
+import { colors, spacing, borderRadius, typography } from '../src/theme';
 import { haptics } from '../src/services/haptics';
 import { JournalSession, MemoryNode } from '../src/types';
 import * as database from '../src/services/database';
@@ -250,6 +250,7 @@ const styles = StyleSheet.create({
   content: {
     paddingHorizontal: spacing.lg,
     paddingBottom: spacing.xxl,
+    flexGrow: 1,
   },
   titleContainer: {
     marginTop: spacing.xxl,

@@ -113,6 +113,79 @@ async function generateWithXAI(prompt: string, signal?: AbortSignal): Promise<st
 }
 
 // =============================================================================
+// Similarity Checking
+// =============================================================================
+
+/**
+ * Check if two subjects/topics are similar enough to be considered the same
+ */
+function areSubjectsSimilar(subject1: string | undefined, subject2: string | undefined): boolean {
+  if (!subject1 || !subject2) return false;
+
+  const s1 = subject1.toLowerCase().trim();
+  const s2 = subject2.toLowerCase().trim();
+
+  // Exact match
+  if (s1 === s2) return true;
+
+  // One contains the other
+  if (s1.includes(s2) || s2.includes(s1)) return true;
+
+  // Tokenize and check word overlap
+  const words1 = s1.split(/\s+/).filter(w => w.length > 2);
+  const words2 = s2.split(/\s+/).filter(w => w.length > 2);
+
+  // Check for significant word overlap (>50% of shorter list)
+  const overlap = words1.filter(w => words2.some(w2 =>
+    w === w2 || w.includes(w2) || w2.includes(w)
+  ));
+  const minWords = Math.min(words1.length, words2.length);
+  if (minWords > 0 && overlap.length / minWords >= 0.5) return true;
+
+  return false;
+}
+
+/**
+ * Find an existing pattern that's similar to the given subject/description
+ */
+function findSimilarPattern(
+  subject: string | undefined,
+  description: string,
+  patternType: PatternType,
+  existingPatterns: Pattern[]
+): Pattern | null {
+  // First try to find by subject similarity (strongest signal)
+  if (subject) {
+    const bySubject = existingPatterns.find(p =>
+      p.patternType === patternType && areSubjectsSimilar(p.subject, subject)
+    );
+    if (bySubject) return bySubject;
+  }
+
+  // Then check description similarity for same type
+  const descLower = description.toLowerCase();
+  const descWords = descLower.split(/\s+/).filter(w => w.length > 4);
+
+  for (const pattern of existingPatterns) {
+    if (pattern.patternType !== patternType) continue;
+
+    const existingDescLower = pattern.description.toLowerCase();
+    const existingWords = existingDescLower.split(/\s+/).filter(w => w.length > 4);
+
+    // Check for significant word overlap (>30% of words match)
+    const overlap = descWords.filter(w => existingWords.some(ew =>
+      w === ew || w.includes(ew) || ew.includes(w)
+    ));
+
+    if (descWords.length > 0 && overlap.length / descWords.length >= 0.3) {
+      return pattern;
+    }
+  }
+
+  return null;
+}
+
+// =============================================================================
 // Pattern Detection
 // =============================================================================
 
@@ -237,6 +310,20 @@ Analyze the current session in context of the user's history. Look for:
    - Things they keep bringing up without resolution
    - Decisions they're circling around
    - Questions they ask but don't explore
+
+---
+
+CRITICAL: AVOID DUPLICATE/SIMILAR PATTERNS
+
+Before creating a new pattern, check the EXISTING PATTERNS above carefully:
+- If an existing pattern covers the SAME TOPIC or PERSON, ADD to "updated_patterns" instead of "new_patterns"
+- If an existing pattern is about a SIMILAR subject (e.g., "stress at work" vs "work stress"), UPDATE the existing one
+- NEVER create two patterns about the same person, topic, or question
+- Merge related observations into ONE comprehensive pattern
+- Examples of patterns that should be MERGED (not created separately):
+  * "Feeling stressed about job" and "Work anxiety" → UPDATE existing
+  * "Relationship with Sarah" and "Sarah dynamics" → UPDATE existing
+  * "Should I move?" and "Thinking about relocating" → UPDATE existing
 
 ---
 
@@ -381,8 +468,31 @@ export async function detectAndUpdatePatterns(
       return;
     }
 
-    // 1. Create new patterns (only if they meet threshold)
+    // 1. Create new patterns (only if they meet threshold and no similar exists)
     for (const newPattern of result.new_patterns) {
+      // Check for similar existing pattern first
+      const similarPattern = findSimilarPattern(
+        newPattern.subject,
+        newPattern.description,
+        newPattern.type,
+        existingPatterns
+      );
+
+      if (similarPattern) {
+        // Merge into existing pattern instead of creating new
+        console.log(`🔄 Merging "${newPattern.subject}" into existing pattern "${similarPattern.subject}"`);
+        const mergedSessions = [...new Set([...similarPattern.relatedSessions, ...newPattern.evidence_sessions])];
+        const mergedQuotes = [...new Set([...similarPattern.evidenceQuotes, ...newPattern.evidence_quotes])].slice(0, 10);
+        await db.updatePattern(similarPattern.id, {
+          description: newPattern.description, // Use newer, potentially more comprehensive description
+          relatedSessions: mergedSessions,
+          evidenceQuotes: mergedQuotes,
+          confidence: Math.min(0.95, similarPattern.confidence + 0.1),
+          lastUpdated: new Date(),
+        });
+        continue;
+      }
+
       // Validate threshold requirements
       if (newPattern.evidence_sessions.length < MIN_SESSIONS_FOR_ACTIVE) {
         console.log(`📋 Pattern "${newPattern.subject}" needs more sessions (${newPattern.evidence_sessions.length}/${MIN_SESSIONS_FOR_ACTIVE})`);
@@ -425,24 +535,53 @@ export async function detectAndUpdatePatterns(
 
     // 2. Store potential patterns (developing, not yet confirmed)
     for (const potential of result.potential_patterns) {
+      // First check for similar ACTIVE pattern - merge into that
+      const similarActive = findSimilarPattern(
+        potential.subject,
+        potential.description,
+        potential.type,
+        existingPatterns.filter(p => p.status === 'active')
+      );
+
+      if (similarActive) {
+        // Merge into existing active pattern
+        console.log(`🔄 Merging developing "${potential.subject}" into active pattern "${similarActive.subject}"`);
+        const mergedSessions = [...new Set([...similarActive.relatedSessions, ...potential.evidence_sessions])];
+        await db.updatePattern(similarActive.id, {
+          relatedSessions: mergedSessions,
+          lastUpdated: new Date(),
+        });
+        continue;
+      }
+
       // Check if we already have a developing pattern for this subject
       const existing = potential.subject
         ? await db.findDevelopingPatternBySubject(potential.subject)
         : null;
 
-      if (existing) {
+      // Also check for similar developing patterns
+      const similarDeveloping = !existing ? findSimilarPattern(
+        potential.subject,
+        potential.description,
+        potential.type,
+        existingPatterns.filter(p => p.status === 'developing')
+      ) : null;
+
+      const patternToUpdate = existing || similarDeveloping;
+
+      if (patternToUpdate) {
         // Update existing developing pattern
-        const mergedSessions = [...new Set([...existing.relatedSessions, ...potential.evidence_sessions])];
-        await db.updatePattern(existing.id, {
+        const mergedSessions = [...new Set([...patternToUpdate.relatedSessions, ...potential.evidence_sessions])];
+        await db.updatePattern(patternToUpdate.id, {
           relatedSessions: mergedSessions,
           lastUpdated: new Date(),
           description: potential.description, // Update description with latest context
         });
-        console.log(`📝 Updated developing pattern: ${potential.subject}`);
+        console.log(`📝 Updated developing pattern: ${patternToUpdate.subject || potential.subject}`);
 
         // Check if it now meets threshold
         if (mergedSessions.length >= MIN_SESSIONS_FOR_ACTIVE) {
-          await checkAndPromotePattern(existing.id);
+          await checkAndPromotePattern(patternToUpdate.id);
         }
       } else {
         // Create new developing pattern

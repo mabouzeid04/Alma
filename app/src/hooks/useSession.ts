@@ -1,11 +1,13 @@
 import { useState, useCallback, useRef } from 'react';
 import { v4 as uuid } from 'uuid';
-import { JournalSession, Message, ConversationState, MemoryNode, MemoryVector, Prompt } from '../types';
+import { JournalSession, Message, ConversationState, MemoryNode, MemoryVector, Prompt, ConversationContext } from '../types';
 import * as database from '../services/database';
 import * as audio from '../services/audio';
 import * as ai from '../services/ai';
 import { detectAndUpdatePatterns } from '../services/patterns';
+import { evaluateTheories } from '../services/theories';
 import { markPromptExplored, buildPromptSessionOpener } from '../services/prompts';
+import { buildConversationContext } from '../services/personalization';
 import { haptics } from '../services/haptics';
 
 // Standalone function to process session memory (can be called from processing screen)
@@ -33,6 +35,11 @@ export async function processSessionMemory(session: JournalSession): Promise<voi
   console.log('Detecting patterns...');
   await detectAndUpdatePatterns(session, memoryNode);
   console.log('Pattern detection complete');
+
+  // Theory Evaluation: Update working theories based on patterns
+  console.log('Evaluating theories...');
+  await evaluateTheories(session, memoryNode);
+  console.log('Theory evaluation complete');
 }
 
 export function useSession() {
@@ -155,6 +162,9 @@ export function useSession() {
     haptics.recordingStopped();
 
     if (result) {
+      // Show transcribing state while processing audio
+      setConversationState('transcribing');
+
       // Transcribe audio
       const transcription = await ai.transcribeAudio(result.uri);
 
@@ -200,13 +210,28 @@ export function useSession() {
       );
       console.log(`🧩 Found ${relevantMemoryVectors.length} memory snippets`);
 
+      // Build personalized conversation context (patterns, emotional baseline, topic history)
+      console.log('🎭 Building personalized context...');
+      let conversationContext: ConversationContext | undefined;
+      try {
+        conversationContext = await buildConversationContext(
+          transcription.text,
+          allMemoriesRef.current
+        );
+        console.log(`✨ Built personalized context: ${conversationContext.relevantPatterns.length} patterns, ${conversationContext.topicHistories.length} topic histories`);
+      } catch (error) {
+        console.warn('Failed to build conversation context:', error);
+        // Continue without personalization context - not critical
+      }
+
       // Generate response with full context
       console.log('⚙️ Generating AI response...');
       const response = await ai.generateResponse(
         updatedMessages,
         personalKnowledge,
         relevantMemories,
-        relevantMemoryVectors
+        relevantMemoryVectors,
+        conversationContext
       );
       console.log('✅ AI response received:', response.text.substring(0, 50));
 

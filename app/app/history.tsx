@@ -14,7 +14,7 @@ import { useRouter } from 'expo-router';
 import Animated, { FadeIn, FadeInUp, SlideInDown, runOnJS } from 'react-native-reanimated';
 import { Gesture, GestureDetector, Swipeable } from 'react-native-gesture-handler';
 import { Ionicons } from '@expo/vector-icons';
-import { colors, spacing, typography, borderRadius, shadows } from '../src/theme';
+import { colors, spacing, borderRadius, shadows, typography } from '../src/theme';
 import { useSessions } from '../src/hooks';
 import { haptics } from '../src/services/haptics';
 import { JournalSession, MemoryNode } from '../src/types';
@@ -329,7 +329,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: spacing.xl,
-    paddingTop: spacing.xxxl,
   },
   emptyTitle: {
     ...typography.body,

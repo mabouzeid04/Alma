@@ -1,6 +1,6 @@
 import React from 'react';
 import { View, Text, StyleSheet, Pressable } from 'react-native';
-import { colors, spacing, borderRadius, typography, shadows } from '../theme';
+import { colors, spacing, borderRadius, shadows, typography } from '../theme';
 import { JournalSession } from '../types';
 import { format, isToday, isYesterday } from 'date-fns';
 import { haptics } from '../services/haptics';
@@ -11,6 +11,7 @@ interface SessionCardProps {
 }
 
 export function SessionCard({ session, onPress }: SessionCardProps) {
+
   const handlePress = () => {
     haptics.light();
     onPress();
@@ -123,3 +124,4 @@ const styles = StyleSheet.create({
     opacity: 0.6,
   },
 });
+

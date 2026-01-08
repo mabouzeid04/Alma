@@ -10,7 +10,7 @@
  * Uses ElevenLabs for voice (REST API) and supports Gemini, Grok, and GPT.
  */
 
-import { Message, MemoryNode, MemoryVector, JournalSession } from '../types';
+import { Message, MemoryNode, MemoryVector, JournalSession, ConversationContext } from '../types';
 import { v4 as uuid } from 'uuid';
 import { fetchWithRetry, createTimeoutController } from './api-utils';
 
@@ -448,10 +448,11 @@ export async function generateResponse(
   personalKnowledge: string,
   relevantMemories: MemoryNode[],
   relevantMemoryVectors: MemoryVector[] = [],
+  conversationContext?: ConversationContext,
   modelOverride?: Partial<ModelPreference>
 ): Promise<AIResponse> {
   const modelPreference = resolveModelPreference(modelOverride);
-  const systemPrompt = buildSystemPrompt(personalKnowledge, relevantMemories, relevantMemoryVectors);
+  const systemPrompt = buildSystemPrompt(personalKnowledge, relevantMemories, relevantMemoryVectors, conversationContext);
   const conversationHistory = formatConversationHistory(messages);
   const chatMessages = buildChatMessages(systemPrompt, messages);
 
@@ -498,14 +499,13 @@ export async function generateResponse(
   } catch (error) {
     console.error('❌ Response generation error:', error);
 
-    if (modelPreference.provider !== 'gemini' && activeGeminiApiKey) {
+    if (modelPreference.provider !== 'xai' && activeXaiApiKey) {
       try {
         const { controller, timeoutId } = createTimeoutController();
         try {
-          const text = await generateWithGemini(
-            systemPrompt,
-            conversationHistory,
-            DEFAULT_MODELS.gemini,
+          const text = await generateWithXAI(
+            chatMessages,
+            DEFAULT_MODELS.xai,
             controller.signal
           );
           const audioUri = await synthesizeSpeech(text);
@@ -514,7 +514,7 @@ export async function generateResponse(
           clearTimeout(timeoutId);
         }
       } catch (fallbackError) {
-        console.error('❌ Gemini fallback failed:', fallbackError);
+        console.error('❌ Grok fallback failed:', fallbackError);
       }
     }
 
@@ -1283,19 +1283,20 @@ function formatConversationHistory(messages: Message[]): string {
 
 function formatTranscriptForAnalysis(messages: Message[]): string {
   return messages
-    .map((msg) => `${msg.isUser ? 'Me' : 'AI'}: ${msg.content}`)
+    .map((msg) => `${msg.isUser ? 'Me' : 'Alma'}: ${msg.content}`)
     .join('\n');
 }
 
 function buildSystemPrompt(
   personalKnowledge: string,
   relevantMemories: MemoryNode[],
-  relevantMemoryVectors: MemoryVector[]
+  relevantMemoryVectors: MemoryVector[],
+  conversationContext?: ConversationContext
 ): string {
-  let prompt = `You are a thoughtful friend helping someone journal through voice conversation.
+  let prompt = `Your name is Alma. You are a thoughtful friend helping someone journal through voice conversation.
 
 YOUR PERSONALITY:
-- Sound like a real friend, not a therapist or AI assistant
+- Sound like a real friend, not a therapist or generic AI assistant
 - Match their energy - casual if they're casual, reflective if they're reflective
 - Use natural language: "That sounds rough", "What happened?", "Makes sense"
 - NEVER use therapy-speak: "I hear that you're feeling...", "Thank you for sharing"
@@ -1308,22 +1309,31 @@ CONVERSATION STYLE:
 
 MEMORY INTEGRATION:
 - Reference past context naturally, like a friend would
-- "Didn't this happen before with that project?"
-- "You felt this way a few weeks ago when..."
+- Use natural timeframes: "a few weeks ago", "last month", "a while back"
+- Include emotional context: "Last time you talked about this, you seemed really stressed"
+- Connect to patterns: "This feels similar to when you were dealing with [past situation]"
 - Only bring up past stuff when genuinely relevant
 - Sound like you remember, not like you're reading a database
 
 WHAT TO PROBE VS SKIP:
-Probe deeper on:
+- Use your name "Alma" if it feels natural in the context of being a friend, but don't overdo it.
+- Probe deeper on:
 - Strong emotions (anxiety, excitement, frustration)
-- Recurring themes they keep mentioning
-- Decisions or dilemmas
-- Relationship dynamics
+- Recurring themes or unresolved questions they keep circling
+- Decisions or dilemmas they're working through
+- Relationship dynamics that seem significant
+- When they mention something new for the first time (new person, new situation)
 
 Move on from:
 - Small daily logistics mentioned in passing
-- Topics they seem done with
+- Topics they seem done with or resolved
 - Things they clearly don't want to explore
+
+EMOTIONAL ATTUNEMENT:
+- Notice when they seem different from their usual baseline
+- "You sound more stressed than usual - what's going on?"
+- "You seem really energized about this - that's great"
+- If they're just venting, validate without interrogating
 
 RESPONSE LENGTH:
 - Keep it SHORT - this is voice, not text
@@ -1335,10 +1345,78 @@ RESPONSE LENGTH:
     prompt += '\n\nWHAT YOU KNOW ABOUT THEM:\n' + personalKnowledge;
   }
 
+  // Add personalized context (patterns, emotional baseline, topic history)
+  if (conversationContext) {
+    // Emotional baseline
+    if (conversationContext.emotionalBaseline.dominantEmotions.length > 0) {
+      prompt += '\n\nEMOTIONAL BASELINE:';
+      prompt += `\n- Their typical emotions lately: ${conversationContext.emotionalBaseline.dominantEmotions.join(', ')}`;
+      if (conversationContext.emotionalBaseline.trendNarrative) {
+        prompt += `\n- ${conversationContext.emotionalBaseline.trendNarrative}`;
+      }
+      if (conversationContext.emotionalBaseline.deviationFromBaseline) {
+        prompt += `\n- NOTE FOR THIS CONVERSATION: ${conversationContext.emotionalBaseline.deviationFromBaseline}`;
+      }
+    }
+
+    // Relevant patterns for current topics
+    if (conversationContext.relevantPatterns.length > 0) {
+      prompt += '\n\nPATTERNS YOU\'VE NOTICED (use naturally if relevant):';
+      for (const pattern of conversationContext.relevantPatterns.slice(0, 3)) {
+        prompt += `\n- ${pattern.description}`;
+        if (pattern.evidenceQuotes.length > 0) {
+          prompt += `\n  (They said: "${pattern.evidenceQuotes[0]}")`;
+        }
+      }
+    }
+
+    // Topic histories with natural references
+    if (conversationContext.topicHistories.length > 0) {
+      prompt += '\n\nPAST CONVERSATIONS ABOUT THESE TOPICS:';
+      for (const history of conversationContext.topicHistories.slice(0, 3)) {
+        if (history.pastDiscussions.length > 0) {
+          const ref = history.pastDiscussions[0];
+          let entry = `\n- ${ref.timeframeNatural}, about ${history.topic}: "${ref.summary}"`;
+          if (ref.emotionalContext) {
+            entry += ` (they ${ref.emotionalContext})`;
+          }
+          prompt += entry;
+        }
+        if (history.opinionEvolution) {
+          prompt += `\n  (Their feelings have evolved: ${history.opinionEvolution})`;
+        }
+      }
+    }
+
+    // Unresolved questions they keep circling
+    if (conversationContext.unresolvedQuestions.length > 0) {
+      prompt += '\n\nUNRESOLVED QUESTIONS THEY KEEP CIRCLING (gently probe if they bring these up):';
+      for (const q of conversationContext.unresolvedQuestions.slice(0, 3)) {
+        prompt += `\n- "${q.subject}": ${q.description}`;
+      }
+    }
+
+    // Relationship patterns
+    if (conversationContext.relationshipPatterns.length > 0) {
+      prompt += '\n\nRELATIONSHIP DYNAMICS YOU\'VE NOTICED:';
+      for (const rp of conversationContext.relationshipPatterns.slice(0, 3)) {
+        prompt += `\n- ${rp.subject}: ${rp.description}`;
+      }
+    }
+
+    // Probe opportunities (internal guidance)
+    if (conversationContext.probeOpportunities.length > 0) {
+      prompt += '\n\nOPPORTUNITIES TO PROBE DEEPER (only if it feels natural):';
+      for (const opportunity of conversationContext.probeOpportunities) {
+        prompt += `\n- ${opportunity}`;
+      }
+    }
+  }
+
   // Add relevant memories (Layer 3 - retrieved based on context)
   if (relevantMemories.length > 0) {
-    prompt += '\n\nRELEVANT PAST CONVERSATIONS (treat as context, only reference if explicitly relevant):';
-    for (const memory of relevantMemories) {
+    prompt += '\n\nRELEVANT PAST CONVERSATIONS (treat as context, reference naturally when relevant):';
+    for (const memory of relevantMemories.slice(0, 10)) {
       prompt += `\n- ${memory.summary}`;
       if (memory.emotions.length > 0) {
         prompt += ` (felt: ${memory.emotions.join(', ')})`;
@@ -1348,8 +1426,8 @@ RESPONSE LENGTH:
 
   if (relevantMemoryVectors.length > 0) {
     prompt += '\n\nPAST DETAILS (treat as context, only reference if genuinely relevant):';
-    for (const vector of relevantMemoryVectors) {
-      const text = vector.text.length > 500 ? `${vector.text.slice(0, 497)}...` : vector.text;
+    for (const vector of relevantMemoryVectors.slice(0, 15)) {
+      const text = vector.text.length > 300 ? `${vector.text.slice(0, 297)}...` : vector.text;
       prompt += `\n- ${text}`;
     }
   }

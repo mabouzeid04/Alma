@@ -57,20 +57,20 @@ const styles = StyleSheet.create({
   },
   aiContainer: {
     alignSelf: 'flex-start',
-    marginBottom: spacing.sm,  // 12px margin for AI bubbles
+    marginBottom: spacing.sm,
   },
   bubble: {
-    paddingHorizontal: spacing.md,  // 16px padding
-    paddingVertical: spacing.sm,    // 12px padding
-    borderRadius: borderRadius.md,  // 16px corner radius
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    borderRadius: borderRadius.md,
   },
   userBubble: {
-    backgroundColor: colors.userBubble,  // Soft peach #F4B59F
-    borderBottomRightRadius: borderRadius.xs,  // Tail effect
+    backgroundColor: colors.userBubble,
+    borderBottomRightRadius: borderRadius.xs,
   },
   aiBubble: {
-    backgroundColor: colors.aiBubble,  // Tan #D4C5B0
-    borderBottomLeftRadius: borderRadius.xs,  // Tail effect
+    backgroundColor: colors.aiBubble,
+    borderBottomLeftRadius: borderRadius.xs,
   },
   text: {
     ...typography.bodyLarge,
@@ -78,10 +78,10 @@ const styles = StyleSheet.create({
     lineHeight: 24,
   },
   userText: {
-    color: colors.text,  // Deep brown
+    color: colors.background, // White/Cream text for high contrast on dark brown bubbles
   },
   aiText: {
-    color: colors.text,  // Deep brown
+    color: colors.background, // White/Cream text for high contrast on golden brown bubbles
   },
   timestamp: {
     ...typography.caption,
@@ -97,3 +97,4 @@ const styles = StyleSheet.create({
     textAlign: 'left',
   },
 });
+

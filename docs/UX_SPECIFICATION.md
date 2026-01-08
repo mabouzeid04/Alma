@@ -37,20 +37,20 @@ This document defines the complete user experience for SecondBrain, a voice-firs
 ## Visual Design System
 
 ### Color Palette
-**Primary:** Warm earth tones
+**Primary:** Golden Wood tones
 - Beige: `#F5F1E8` (background)
 - Tan: `#D4C5B0` (secondary background)
-- Soft Brown: `#A89080` (text secondary)
-- Deep Brown: `#4A3F35` (text primary)
+- Antique Oak: `#7F5539` (text secondary)
+- Dark Roast: `#5C3D2E` (text primary)
 
 **Accents:**
-- Warm Orange: `#E88D67` (primary actions, pulsing orb)
-- Soft Peach: `#F4B59F` (highlights, hover states)
+- Golden Wood (Raw Sienna): `#A07855` (primary actions, pulsing orb)
+- Pale Walnut: `#BFAFA0` (highlights, hover states)
 - Muted Red: `#C85C5C` (delete actions)
 
 **Modes:**
-- Light mode (default): Cream/beige backgrounds with warm browns
-- Dark mode: Deep charcoal `#2A2420` backgrounds with warm orange accents
+- Light mode (default): Cream/beige backgrounds with golden wood accents
+- Dark mode: Deep charcoal `#2A2420` backgrounds with golden wood accents
 
 ### Typography
 **Font Family:** Rounded sans-serif (similar to Anthropic's style)

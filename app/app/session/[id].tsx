@@ -18,7 +18,7 @@ import Animated, {
 } from 'react-native-reanimated';
 import { Ionicons } from '@expo/vector-icons';
 import { format } from 'date-fns';
-import { colors, spacing, typography, borderRadius } from '../../src/theme';
+import { colors, spacing, borderRadius, typography } from '../../src/theme';
 import { MessageBubble } from '../../src/components';
 import { useSessions } from '../../src/hooks';
 import { haptics } from '../../src/services/haptics';

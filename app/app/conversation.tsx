@@ -15,7 +15,7 @@ import Animated, {
   FadeOut,
   SlideInDown,
 } from 'react-native-reanimated';
-import { colors, spacing, typography, borderRadius } from '../src/theme';
+import { colors, spacing, borderRadius, typography } from '../src/theme';
 import {
   MessageBubble,
   WaveformVisualizer,
@@ -23,7 +23,7 @@ import {
 import { useSession } from '../src/hooks';
 import { haptics } from '../src/services/haptics';
 
-type WaveformState = 'idle' | 'speaking' | 'processing' | 'aiSpeaking';
+type WaveformState = 'idle' | 'speaking' | 'transcribing' | 'processing' | 'aiSpeaking';
 
 export default function ConversationScreen() {
   const router = useRouter();
@@ -46,6 +46,7 @@ export default function ConversationScreen() {
   // Map conversation state to waveform state
   const getWaveformState = (): WaveformState => {
     if (isRecording) return 'speaking';
+    if (conversationState === 'transcribing') return 'transcribing';
     if (conversationState === 'processing') return 'processing';
     if (conversationState === 'responding') return 'aiSpeaking';
     return 'idle';
@@ -249,7 +250,7 @@ export default function ConversationScreen() {
               audioLevel={audioLevel}
             />
             <Text style={styles.waveformHint}>
-              {isRecording ? 'Tap to send' : conversationState === 'idle' ? 'Tap to speak' : ''}
+              {isRecording ? 'Tap to send' : conversationState === 'transcribing' ? 'Transcribing...' : conversationState === 'idle' ? 'Tap to speak' : ''}
             </Text>
           </Pressable>
         </Animated.View>

@@ -623,17 +623,6 @@ function formatMemoriesForContext(memories: MemoryNode[]): string {
 **Bad AI response:**
 "I notice a contradiction. Previously you described the internship negatively, but now you're expressing positive sentiments."
 
-### Example 3: Relationship Context
-
-**User says:** "Sarah and I are going to her parents' this weekend."
-
-**Context loaded:**
-- Pattern: "Sarah mentions have shifted from emotionally warm to logistics-focused"
-
-**Good AI response:**
-"How are things with you two? You've been mentioning a lot of plans lately but haven't really talked about how you're feeling about the relationship."
-
-*(Only ask this if it feels natural and the user seems open - don't force it)*
 
 ### Example 4: Unresolved Question
 
@@ -664,8 +653,8 @@ After implementation:
 
 - [ ] AI references past moments naturally, like a friend would
 - [ ] Time references are human ("a few weeks ago" not dates)
-- [ ] Emotional context is included ("you seemed stressed" not just "you mentioned")
-- [ ] Patterns are woven into conversation naturally
+- [ ] Emotional context is included if you're sure ("you seemed stressed" not just "you mentioned")
+- [ ] Patterns are woven into conveirsation naturally
 - [ ] AI doesn't force memory references when irrelevant
 - [ ] Sessions from prompts stay focused on the exploration
 - [ ] AI sounds warm, not clinical

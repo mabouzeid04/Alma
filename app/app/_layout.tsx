@@ -8,10 +8,14 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { StyleSheet } from 'react-native';
 import * as Linking from 'expo-linking';
 import { colors } from '../src/theme';
+import { useTypography } from '../src/hooks';
 import { getDatabase } from '../src/services/database';
 import { handleE2ELink } from '../src/services/e2e-bridge';
 
 export default function RootLayout() {
+  // Load fonts asynchronously
+  useTypography();
+
   useEffect(() => {
     // Initialize database on app start
     getDatabase();

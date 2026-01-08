@@ -1,4 +1,4 @@
-# Second Brain - Voice Journaling App
+# Alma - Voice Journaling App
 
 Voice-first journaling app with AI conversation and memory system.
 

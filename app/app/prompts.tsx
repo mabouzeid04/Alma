@@ -12,7 +12,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import Animated, { FadeIn, FadeInUp } from 'react-native-reanimated';
 import { Ionicons } from '@expo/vector-icons';
-import { colors, spacing, typography, borderRadius, shadows } from '../src/theme';
+import { colors, spacing, borderRadius, shadows, typography } from '../src/theme';
 import { usePrompts } from '../src/hooks';
 import { PromptCard } from '../src/components';
 import { haptics } from '../src/services/haptics';
@@ -228,7 +228,7 @@ function InsufficientDataState({ sessionsNeeded }: { sessionsNeeded: number }) {
       <Ionicons name="chatbubble-ellipses-outline" size={48} color={colors.textSecondary} />
       <Text style={styles.emptyTitle}>Keep talking, questions are on the way</Text>
       <Text style={styles.emptySubtitle}>
-        I need a few more conversations before I can spot patterns worth exploring.
+        Alma needs a few more conversations before it can spot patterns worth exploring.
         {sessionsNeeded > 0 && ` ${sessionsNeeded} more session${sessionsNeeded === 1 ? '' : 's'} to unlock prompts.`}
       </Text>
       <Pressable
@@ -253,7 +253,7 @@ function EmptyState({ onGenerate }: { onGenerate: () => void }) {
       <Ionicons name="chatbubble-ellipses-outline" size={48} color={colors.textSecondary} />
       <Text style={styles.emptyTitle}>Nothing to explore yet</Text>
       <Text style={styles.emptySubtitle}>
-        Keep journaling and I'll start noticing patterns worth exploring together.
+        Keep journaling and Alma will start noticing patterns worth exploring together.
       </Text>
       <View style={styles.emptyActions}>
         <Pressable onPress={onGenerate} style={styles.generateButtonLarge}>
@@ -333,7 +333,6 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    paddingTop: spacing.xxxl,
   },
   generatingText: {
     ...typography.body,
@@ -345,7 +344,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: spacing.xl,
-    paddingTop: spacing.xxxl,
   },
   emptyTitle: {
     ...typography.bodySemibold,

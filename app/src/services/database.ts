@@ -1,6 +1,6 @@
 import * as SQLite from 'expo-sqlite';
 import { v4 as uuidv4 } from 'uuid';
-import { JournalSession, MemoryNode, MemoryVector, Message, Insight, InsightsReport, InsightPeriod, Pattern, PatternStatus, PatternType, PatternCounterEvidence, Prompt, PromptStatus } from '../types';
+import { JournalSession, MemoryNode, MemoryVector, Message, Insight, InsightsReport, InsightPeriod, Pattern, PatternStatus, PatternType, PatternCounterEvidence, Prompt, PromptStatus, Theory, TheoryStatus, TheoryCategory, TheoryEvidence } from '../types';
 
 const DATABASE_NAME = 'secondbrain.db';
 
@@ -145,6 +145,28 @@ async function initializeTables(): Promise<void> {
     CREATE INDEX IF NOT EXISTS idx_prompts_status ON prompts (status);
     CREATE INDEX IF NOT EXISTS idx_prompts_created ON prompts (created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_prompts_expires ON prompts (expires_at);
+
+    CREATE TABLE IF NOT EXISTS theories (
+      id TEXT PRIMARY KEY,
+      theory TEXT NOT NULL,
+      title TEXT NOT NULL,
+      category TEXT NOT NULL,
+      confidence REAL DEFAULT 0.3,
+      status TEXT DEFAULT 'developing',
+      evidence_sessions TEXT NOT NULL,
+      evidence TEXT NOT NULL,
+      last_evaluated TEXT NOT NULL,
+      first_formed TEXT NOT NULL,
+      questioning_reason TEXT,
+      related_patterns TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_theories_status ON theories (status);
+    CREATE INDEX IF NOT EXISTS idx_theories_category ON theories (category);
+    CREATE INDEX IF NOT EXISTS idx_theories_confidence ON theories (confidence DESC);
+    CREATE INDEX IF NOT EXISTS idx_theories_updated ON theories (updated_at DESC);
   `);
 }
 
@@ -244,6 +266,7 @@ export async function clearAllSessions(): Promise<void> {
     DELETE FROM insights_reports;
     DELETE FROM patterns;
     DELETE FROM prompts;
+    DELETE FROM theories;
     DELETE FROM sessions;
     DELETE FROM personal_knowledge;
   `);
@@ -1029,4 +1052,199 @@ export async function deletePrompt(id: string): Promise<void> {
 export async function clearAllPrompts(): Promise<void> {
   const database = await getDatabase();
   await database.runAsync(`DELETE FROM prompts`);
+}
+
+// Theory operations
+
+function rowToTheory(row: any): Theory {
+  return {
+    id: row.id,
+    theory: row.theory,
+    title: row.title,
+    category: row.category as TheoryCategory,
+    confidence: row.confidence ?? 0.3,
+    status: (row.status ?? 'developing') as TheoryStatus,
+    evidenceSessions: JSON.parse(row.evidence_sessions || '[]'),
+    evidence: JSON.parse(row.evidence || '[]').map((e: any) => ({
+      ...e,
+      addedAt: new Date(e.addedAt),
+    })),
+    lastEvaluated: new Date(row.last_evaluated),
+    firstFormed: new Date(row.first_formed),
+    questioningReason: row.questioning_reason ?? undefined,
+    relatedPatterns: JSON.parse(row.related_patterns || '[]'),
+    createdAt: new Date(row.created_at),
+    updatedAt: new Date(row.updated_at),
+  };
+}
+
+export async function createTheory(theory: Theory): Promise<void> {
+  const database = await getDatabase();
+  await database.runAsync(
+    `INSERT INTO theories (
+      id, theory, title, category, confidence, status,
+      evidence_sessions, evidence, last_evaluated, first_formed,
+      questioning_reason, related_patterns, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      theory.id,
+      theory.theory,
+      theory.title,
+      theory.category,
+      theory.confidence,
+      theory.status,
+      JSON.stringify(theory.evidenceSessions),
+      JSON.stringify(theory.evidence.map((e) => ({ ...e, addedAt: e.addedAt.toISOString() }))),
+      theory.lastEvaluated.toISOString(),
+      theory.firstFormed.toISOString(),
+      theory.questioningReason ?? null,
+      JSON.stringify(theory.relatedPatterns),
+      theory.createdAt.toISOString(),
+      theory.updatedAt.toISOString(),
+    ]
+  );
+}
+
+export async function updateTheory(
+  id: string,
+  updates: Partial<Omit<Theory, 'id' | 'createdAt'>>
+): Promise<void> {
+  const database = await getDatabase();
+
+  const fields: string[] = [];
+  const values: any[] = [];
+
+  if (updates.theory !== undefined) {
+    fields.push('theory = ?');
+    values.push(updates.theory);
+  }
+  if (updates.title !== undefined) {
+    fields.push('title = ?');
+    values.push(updates.title);
+  }
+  if (updates.category !== undefined) {
+    fields.push('category = ?');
+    values.push(updates.category);
+  }
+  if (updates.confidence !== undefined) {
+    fields.push('confidence = ?');
+    values.push(updates.confidence);
+  }
+  if (updates.status !== undefined) {
+    fields.push('status = ?');
+    values.push(updates.status);
+  }
+  if (updates.evidenceSessions !== undefined) {
+    fields.push('evidence_sessions = ?');
+    values.push(JSON.stringify(updates.evidenceSessions));
+  }
+  if (updates.evidence !== undefined) {
+    fields.push('evidence = ?');
+    values.push(JSON.stringify(updates.evidence.map((e) => ({ ...e, addedAt: e.addedAt.toISOString() }))));
+  }
+  if (updates.lastEvaluated !== undefined) {
+    fields.push('last_evaluated = ?');
+    values.push(updates.lastEvaluated.toISOString());
+  }
+  if (updates.questioningReason !== undefined) {
+    fields.push('questioning_reason = ?');
+    values.push(updates.questioningReason);
+  }
+  if (updates.relatedPatterns !== undefined) {
+    fields.push('related_patterns = ?');
+    values.push(JSON.stringify(updates.relatedPatterns));
+  }
+  if (updates.updatedAt !== undefined) {
+    fields.push('updated_at = ?');
+    values.push(updates.updatedAt.toISOString());
+  }
+
+  if (fields.length === 0) return;
+
+  values.push(id);
+  await database.runAsync(
+    `UPDATE theories SET ${fields.join(', ')} WHERE id = ?`,
+    values
+  );
+}
+
+export async function getTheory(id: string): Promise<Theory | null> {
+  const database = await getDatabase();
+  const row = await database.getFirstAsync<any>(
+    `SELECT * FROM theories WHERE id = ?`,
+    [id]
+  );
+  if (!row) return null;
+  return rowToTheory(row);
+}
+
+export async function getAllTheories(): Promise<Theory[]> {
+  const database = await getDatabase();
+  const rows = await database.getAllAsync<any>(
+    `SELECT * FROM theories ORDER BY confidence DESC, updated_at DESC`
+  );
+  return rows.map(rowToTheory);
+}
+
+export async function getConfidentTheories(): Promise<Theory[]> {
+  const database = await getDatabase();
+  const rows = await database.getAllAsync<any>(
+    `SELECT * FROM theories
+     WHERE status = 'confident'
+     ORDER BY confidence DESC, updated_at DESC`
+  );
+  return rows.map(rowToTheory);
+}
+
+export async function getDevelopingTheories(): Promise<Theory[]> {
+  const database = await getDatabase();
+  const rows = await database.getAllAsync<any>(
+    `SELECT * FROM theories
+     WHERE status = 'developing'
+     ORDER BY confidence DESC, updated_at DESC`
+  );
+  return rows.map(rowToTheory);
+}
+
+export async function getQuestioningTheories(): Promise<Theory[]> {
+  const database = await getDatabase();
+  const rows = await database.getAllAsync<any>(
+    `SELECT * FROM theories
+     WHERE status = 'questioning'
+     ORDER BY updated_at DESC`
+  );
+  return rows.map(rowToTheory);
+}
+
+export async function getTheoriesByCategory(category: TheoryCategory): Promise<Theory[]> {
+  const database = await getDatabase();
+  const rows = await database.getAllAsync<any>(
+    `SELECT * FROM theories
+     WHERE category = ?
+     ORDER BY confidence DESC, updated_at DESC`,
+    [category]
+  );
+  return rows.map(rowToTheory);
+}
+
+export async function findTheoryByTitle(title: string): Promise<Theory | null> {
+  const database = await getDatabase();
+  const row = await database.getFirstAsync<any>(
+    `SELECT * FROM theories
+     WHERE title = ?
+     LIMIT 1`,
+    [title]
+  );
+  if (!row) return null;
+  return rowToTheory(row);
+}
+
+export async function deleteTheory(id: string): Promise<void> {
+  const database = await getDatabase();
+  await database.runAsync(`DELETE FROM theories WHERE id = ?`, [id]);
+}
+
+export async function clearAllTheories(): Promise<void> {
+  const database = await getDatabase();
+  await database.runAsync(`DELETE FROM theories`);
 }

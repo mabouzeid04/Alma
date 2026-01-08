@@ -11,7 +11,7 @@ The app solves a fundamental problem: AI agents need persistent, queryable knowl
 **Success Criteria:**
 - Consistent usage (3+ times per week)
 - AI naturally surfaces relevant past context during conversations
-- Journal captures enough detail to be genuinely useful for future AI
+- Journal captures enough detail to be genuinely useful for future Alma interactions
 - Data is structured and portable
 
 **Non-Goals:**
@@ -78,10 +78,25 @@ The app implements a sophisticated memory architecture that enables AI to unders
 - Replay conversations with full message history
 - Direct navigation to specific sessions
 
-### 5. E2E Testing Infrastructure
-- Detox framework integration for iOS simulator testing
-- Database seeding functionality for test scenarios
-- Comprehensive test suite with automated workflows
+### 5. AI-Powered Insights
+- **Pattern Analysis**: Generates narrative insights from journal sessions (minimum 3 sessions required)
+- **Time Periods**: Weekly, monthly, and all-time views
+- **Insight Types**:
+  - Trends: Changes over time
+  - Patterns: Recurring themes or behaviors
+  - Growth: Positive progress or resolved issues
+  - Suggestions: Gentle observations
+  - Reflections: Topics worth thinking about
+- **Emotional Summaries**: Visualizes emotional trends and topic frequencies
+- **Smart Caching**: 24h cache for weekly, 72h for monthly, 168h for all-time insights
+
+### 6. Settings Hub & Data Management
+- **Multi-Page Settings**: Comprehensive settings interface with dedicated pages for different concerns
+- **Pattern Management**: View and delete AI-detected recurring themes and behaviors
+- **Theory Management**: Manage deeper AI hypotheses about beliefs, values, and relationships
+- **Personal Knowledge**: Editable facts the AI remembers about the user
+- **Data Hygiene Tools**: Correct AI misinterpretations to maintain conversation accuracy
+- **Theory Lifecycle**: Confidence-building system for AI hypotheses with contradiction handling
 
 ## Architecture
 
@@ -116,17 +131,45 @@ app/
 │   ├── session/[id].tsx   # Session detail view
 │   ├── summary.tsx        # Session summary display
 │   ├── insights.tsx       # AI-powered insights modal
-│   ├── settings.tsx       # User preferences and configuration
+│   ├── prompts.tsx        # AI-generated journaling prompts
+│   ├── settings/          # Multi-page settings hub
+│   │   ├── _layout.tsx    # Settings navigation structure
+│   │   ├── index.tsx      # Settings hub with menu items
+│   │   ├── personal-knowledge.tsx  # Editable personal facts
+│   │   ├── patterns.tsx   # Pattern viewing and deletion
+│   │   ├── theories.tsx   # Theory management (placeholder)
+│   │   └── preferences.tsx # App preferences (placeholder)
 │   ├── processing.tsx     # Loading state during AI processing
 │   └── _layout.tsx        # Navigation structure and modals
 ├── src/
-│   ├── components/        # UI components (RecordButton, MessageBubble, WaveformVisualizer, etc.)
-│   ├── hooks/             # React hooks (useSessions, useSession, useInsights)
+│   ├── components/        # UI components
+│   │   ├── ConversationStatus.tsx
+│   │   ├── MessageBubble.tsx
+│   │   ├── PatternCard.tsx        # Pattern display card
+│   │   ├── PromptCard.tsx         # Prompt display card
+│   │   ├── PulsingOrb.tsx
+│   │   ├── RecordButton.tsx
+│   │   ├── SessionCard.tsx
+│   │   ├── SettingsMenuItem.tsx   # Settings menu item
+│   │   ├── TheoryCard.tsx         # Theory display card
+│   │   └── WaveformVisualizer.tsx
+│   ├── hooks/             # React hooks
+│   │   ├── useInsights.ts
+│   │   ├── usePatterns.ts         # Pattern management
+│   │   ├── usePrompts.ts
+│   │   ├── useSession.ts
+│   │   ├── useSessions.ts
+│   │   ├── useTheories.ts         # Theory management
+│   │   └── useTypography.ts       # Typography utilities
 │   ├── services/          # Core business logic
-│   │   ├── ai.ts         # Voice AI, memory synthesis, embeddings
-│   │   ├── audio.ts      # Recording and playback via expo-av
-│   │   ├── database.ts   # SQLite operations and schema
-│   │   └── insights.ts   # Insights generation and caching
+│   │   ├── ai.ts          # Voice AI, memory synthesis, embeddings
+│   │   ├── audio.ts       # Recording and playback via expo-av
+│   │   ├── database.ts    # SQLite operations and schema
+│   │   ├── insights.ts    # Insights generation and caching
+│   │   ├── patterns.ts    # Pattern detection and management
+│   │   ├── personalization.ts    # User preferences and settings
+│   │   ├── prompts.ts     # AI-generated prompts
+│   │   └── theories.ts    # Working theories system
 │   ├── theme/             # Design system (colors, typography, spacing)
 │   └── types/             # TypeScript interfaces
 ├── e2e/                   # End-to-end tests (Detox)
@@ -144,6 +187,9 @@ SQLite database with the following tables:
 - **personal_facts**: Persistent user facts with active/inactive status (id, category, key, value, active, createdAt, updatedAt)
 - **insights_reports**: Cached insight reports by time period (id, period, generatedAt, emotionalSummary, topics, expiresAt)
 - **insights**: Individual insight entries (id, reportId, type, content, expiresAt)
+- **patterns**: AI-detected recurring themes (id, subject, description, patternType, confidence, evidenceQuotes, relatedSessions, firstObserved, deletedAt)
+- **theories**: AI hypotheses about beliefs/values/behaviors (id, title, theory, category, confidence, status, evidence, evidenceSessions, lastEvaluated, firstFormed, relatedPatterns)
+- **prompts**: AI-generated journaling prompts (id, question, relatedSessions, status, createdAt, expiresAt)
 
 All tables auto-created on app initialization. No manual migrations needed.
 
@@ -188,16 +234,23 @@ All tables auto-created on app initialization. No manual migrations needed.
 ## Screens & Navigation
 
 ### Main Screens
-- **Home (index.tsx)**: Record button, quick access to history and insights
+- **Home (index.tsx)**: Record button, quick access to history, insights, and prompts
 - **Conversation (conversation.tsx)**: Active voice session with waveform visualization
 - **Processing (processing.tsx)**: Loading state during memory synthesis
 - **Summary (summary.tsx)**: Session summary with structured insights
 - **History (history.tsx)**: List of all past journal sessions
 - **Session Detail (session/[id].tsx)**: View specific session with full conversation
+- **Prompts (prompts.tsx)**: AI-generated journaling prompts based on user patterns
 
 ### Modal Screens
 - **Insights (insights.tsx)**: AI-powered pattern analysis (slide from bottom)
-- **Settings (settings.tsx)**: User preferences and configuration
+
+### Settings Hub (Multi-Page)
+- **Settings Index (settings/index.tsx)**: Hub page with menu items for different settings
+- **Personal Knowledge (settings/personal-knowledge.tsx)**: Editable facts the AI remembers
+- **Patterns (settings/patterns.tsx)**: View and delete AI-detected patterns
+- **Theories (settings/theories.tsx)**: View and delete AI hypotheses (placeholder)
+- **Preferences (settings/preferences.tsx)**: App settings (placeholder)
 
 ## External Services
 
@@ -229,7 +282,7 @@ The AI is designed to sound like a **thoughtful friend, not a therapist**. Key p
 - **Conversational language**: "That sounds rough" not "I hear that you're experiencing frustration"
 
 ### Visual Design
-- **Warm earth tones**: #F5F1E8 background, #E88D67 primary accent
+- **Warm earth tones**: #F5F1E8 background, #A07855 primary accent (Golden Wood/Raw Sienna)
 - **Clean typography**: System fonts with consistent hierarchy
 - **Smooth animations**: Reanimated for natural transitions
 - **Real-time feedback**: Waveform visualization during recording
@@ -274,7 +327,92 @@ import { useSession } from '@/hooks'
 
 ## Recent Changes & Development History
 
-Last Updated: 2026-01-05
+Last Updated: 2026-01-08
+
+### Recent Changes - January 8, 2026
+
+### Settings Hub Restructure Implementation
+
+**Major UI/UX Overhaul**: Transformed the simple Personal Knowledge settings page into a comprehensive multi-page Settings Hub that provides users with data hygiene tools to manage AI-detected patterns and theories.
+
+**New Settings Hub Architecture**:
+- **Settings Hub** (`app/app/settings/index.tsx`): Central navigation page with menu items for different settings categories
+- **Personal Knowledge** (`app/app/settings/personal-knowledge.tsx`): Moved from original settings page - editable personal facts the AI remembers
+- **Patterns** (`app/app/settings/patterns.tsx`): View and delete AI-detected recurring themes and behaviors
+- **Theories** (`app/app/settings/theories.tsx`): View and delete deeper AI hypotheses about beliefs, values, and behaviors
+- **Preferences** (`app/app/settings/preferences.tsx`): Placeholder for future app settings (voice, notifications, appearance)
+
+**Navigation Structure** (`app/app/settings/_layout.tsx`):
+- Stack navigator for settings sub-pages with consistent header styling
+- Back navigation from sub-pages to hub
+- Clean separation of concerns between hub and individual pages
+
+**Data Hygiene Features**:
+- **Pattern Management**: Users can view all AI-detected patterns in card format with delete functionality
+- **Theory Management**: Similar interface for managing working theories (deeper hypotheses)
+- **Confirmation Dialogs**: Safe deletion with clear warnings about AI behavior changes
+- **Session Linking**: Each pattern/theory shows related session counts and first observation dates
+
+**New Services & Hooks**:
+
+**Personalization Service** (`app/src/services/personalization.ts`):
+- Foundation for user preferences and app customization
+- Currently stub implementation for future features
+- Configurable AI model providers and voice settings
+
+**Theories Service** (`app/src/services/theories.ts`):
+- Advanced AI-powered theory formation system
+- Higher thresholds than patterns (10+ sessions, 8+ weeks minimum)
+- Confidence scoring with decay for contradictions
+- Categories: values, behaviors, relationships, beliefs, triggers
+- Status progression: developing → confident, with questioning state for contradictions
+- Background understanding that informs AI responses without being prominently displayed
+
+**Enhanced Patterns Service** (`app/src/services/patterns.ts`):
+- Improved pattern detection with emergent LLM analysis
+- Pattern types: emotional, behavioral, relational, thematic, unresolved questions
+- Confidence scoring and evidence tracking
+- Auto-maintenance with soft deletion capabilities
+
+**React Hooks**:
+- **usePatterns** (`app/src/hooks/usePatterns.ts`): State management for pattern viewing and deletion
+- **useTheories** (`app/src/hooks/useTheories.ts`): State management for theory management (currently stub)
+- **useTypography** (`app/src/hooks/useTypography.ts`): Theme-aware typography utilities
+
+**New UI Components**:
+- **SettingsMenuItem** (`app/src/components/SettingsMenuItem.tsx`): Reusable menu item with icon, title, subtitle, and optional badge
+- **PatternCard** (`app/src/components/PatternCard.tsx`): Display card for patterns with delete functionality
+- **TheoryCard** (`app/src/components/TheoryCard.tsx`): Display card for theories with delete functionality
+
+**Database Schema Extensions**:
+- Enhanced pattern/theory tables with confidence scoring and evidence tracking
+- Soft deletion support for patterns
+- Theory lifecycle management (developing/confident/questioning)
+- Auto-creation on app initialization
+
+**Design System Enhancements**:
+- Updated iconography for different settings categories
+- Consistent card layouts matching history/insights screens
+- Warm earth tone aesthetic maintained (#F5F1E8 background, #E88D67 primary)
+- Responsive typography and spacing
+
+**Key Implementation Details**:
+- **Data Hygiene Philosophy**: Users must be able to correct AI misinterpretations to maintain conversation accuracy
+- **Theory vs Pattern Distinction**: Patterns are "what" observations, theories are "why" hypotheses
+- **Confidence Building**: Theories start with low confidence (0.3) and build over time with evidence
+- **Contradiction Handling**: Theories decay when contradicted, entering questioning state
+- **Session-Based Context**: All patterns/theories link to specific journal sessions for transparency
+
+**Environment Variables**:
+- `EXPO_PUBLIC_THEORY_MODEL_PROVIDER`: AI provider for theory detection (defaults to xai)
+- `EXPO_PUBLIC_THEORY_MODEL`: Model for theory analysis (defaults to grok-4-1-fast-non-reasoning)
+
+**Migration Details**:
+- Original `settings.tsx` content moved to `settings/personal-knowledge.tsx`
+- New folder-based routing structure with `_layout.tsx` navigator
+- All existing functionality preserved with enhanced data management capabilities
+
+---
 
 ### Recent Changes - January 5, 2026
 
@@ -506,8 +644,8 @@ Implemented comprehensive pattern analysis system that generates narrative insig
 
 # System Overview & Recent Changes
 
-## Project: Second Brain
-Second Brain is a voice-first journaling application built with React Native (Expo), featuring AI-driven conversations and a sophisticated memory system.
+## Project: Alma
+Alma is a voice-first journaling application built with React Native (Expo), featuring AI-driven conversations and a sophisticated memory system.
 
 ## Recent Updates (January 1, 2026)
 
