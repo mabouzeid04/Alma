@@ -255,11 +255,11 @@ All transitions: 300ms ease-in-out
 
 **Technical Behavior:**
 - Continuous voice recording throughout session
-- Real-time transcription using ElevenLabs STT
+- Real-time transcription using Gemini STT
 - Voice activity detection (VAD) to detect pauses
 - Sentiment/completion analysis to determine if AI should respond
 - AI uses Gemini with conversation history + knowledge base + relevant memories
-- ElevenLabs TTS for AI voice responses
+- Gemini TTS for AI voice responses
 - Haptic engine for feedback
 
 ---
@@ -597,7 +597,7 @@ All transitions: 300ms ease-in-out
 - **First tap on orb:** iOS permission dialog
 - **If denied:** Modal explaining microphone is required, button to open Settings
 
-### API Failure (ElevenLabs, Gemini)
+### API Failure (Gemini)
 - **Transcription fails:** Show error in conversation, save audio file for retry
 - **AI doesn't respond:** Show bubble: "Sorry, I'm having trouble responding. Keep talking and I'll catch up."
 - **TTS fails:** Show text response without voice
@@ -669,8 +669,7 @@ All transitions: 300ms ease-in-out
 - Knowledge base: JSON or SQLite
 
 ### API Integrations
-- ElevenLabs: Speech-to-text (real-time), Text-to-speech
-- Gemini: Conversational AI, memory synthesis
+- Gemini: Speech-to-text, Text-to-speech, Conversational AI, memory synthesis
 - Local fallbacks: Save transcripts if APIs fail
 
 ### Platforms
@@ -741,7 +740,7 @@ Before implementation, verify:
 - **Framework:** React Native with Expo (already in use)
 - **Navigation:** React Navigation with custom gestures for swipe
 - **State:** Context API or Zustand for app state
-- **Audio:** Expo AV for recording, ElevenLabs SDK for transcription/TTS
+- **Audio:** Expo AV for recording, Gemini API for transcription/TTS
 - **AI:** Google Gemini SDK for conversation and synthesis
 - **Database:** expo-sqlite for transcripts and knowledge base
 - **Vectors:** SQLite with vector extension or lightweight vector library

@@ -25,7 +25,7 @@ The app solves a fundamental problem: AI agents need persistent, queryable knowl
 ### 1. Voice-First Journaling
 - **Natural Conversation**: Talk through thoughts and feelings as if speaking to a thoughtful friend
 - **Real-Time Recording**: Audio capture with visual waveform feedback during recording
-- **Automatic Transcription**: ElevenLabs Scribe API converts speech to text
+- **Automatic Transcription**: Gemini multimodal API converts speech to text
 - **AI-Powered Responses**: Gemini generates contextually aware responses with text-to-speech playback
 - **Session Management**: All conversations saved with full history and playback capabilities
 
@@ -111,8 +111,7 @@ The app implements a sophisticated memory architecture that enables AI to unders
 
 **Backend Services:**
 - SQLite (expo-sqlite) for local data persistence
-- ElevenLabs API for speech-to-text (Scribe) and text-to-speech (eleven_turbo_v2_5)
-- Gemini API for AI conversation (gemini-3-flash-preview) and embeddings (text-embedding-004)
+- Gemini API for STT (gemini-2.5-flash), TTS (gemini-2.5-flash-preview-tts), AI conversation (gemini-3-flash-preview), and embeddings (text-embedding-004)
 - xAI (Grok) as alternative conversation model provider
 
 **Testing:**
@@ -200,7 +199,7 @@ All tables auto-created on app initialization. No manual migrations needed.
 2. App navigates to conversation screen
 3. AI greets user with time-appropriate opener
 4. User begins speaking (waveform visualizes audio levels)
-5. Speech transcribed in real-time via ElevenLabs
+5. Speech transcribed via Gemini
 6. AI generates response using:
    - Personal knowledge base (always loaded)
    - Top 3-5 most relevant past memory nodes (semantic search)
@@ -254,16 +253,13 @@ All tables auto-created on app initialization. No manual migrations needed.
 
 ## External Services
 
-### ElevenLabs API
-- **Speech-to-Text**: Scribe API for real-time transcription
-- **Text-to-Speech**: eleven_turbo_v2_5 model for natural AI voice
-- **Configuration**: API key and optional custom voice ID via environment variables
-
 ### Gemini API
+- **Speech-to-Text**: gemini-2.5-flash for multimodal audio transcription
+- **Text-to-Speech**: gemini-2.5-flash-preview-tts for natural AI voice
 - **Conversation**: gemini-3-flash-preview for AI responses
 - **Embeddings**: text-embedding-004 for semantic search (768-dimensional vectors)
 - **Insights**: gemini-2.0-flash for pattern analysis
-- **Configuration**: API key via environment variables
+- **Configuration**: API key and optional TTS voice name via environment variables
 
 ### xAI (Grok)
 - **Alternative Model**: grok-4.1-fast-non-reasoning as configurable conversation provider
@@ -292,9 +288,8 @@ The AI is designed to sound like a **thoughtful friend, not a therapist**. Key p
 
 ### Environment Variables
 See `app/.env.example` for complete list. Key variables:
-- `EXPO_PUBLIC_ELEVENLABS_API_KEY`: Required for speech services
-- `EXPO_PUBLIC_GEMINI_API_KEY`: Required for AI and embeddings
-- `EXPO_PUBLIC_ELEVENLABS_VOICE_ID`: Optional custom voice
+- `EXPO_PUBLIC_GEMINI_API_KEY`: Required for STT, TTS, AI, and embeddings
+- `EXPO_PUBLIC_GEMINI_TTS_VOICE`: Optional TTS voice name (default: Kore)
 - Model provider and model selection for conversation, memory, knowledge, and insights
 
 ### Common Commands
@@ -658,13 +653,13 @@ Alma is a voice-first journaling application built with React Native (Expo), fea
     - Updated app icons and splash screen assets.
 
 ### Services & Logic
-- **AI Service (`ai.ts`)**: Enhanced the voice AI conversation flow, memory synthesis, and embedding generation using Gemini and ElevenLabs.
+- **AI Service (`ai.ts`)**: Enhanced the voice AI conversation flow, memory synthesis, and embedding generation using Gemini.
 - **Audio Service (`audio.ts`)**: Optimized audio recording and playback logic using `expo-av` and `expo-audio`.
 - **Database Service**: Improved SQLite integration for session management and personal fact extraction.
 - **Hooks**: Updated `useSession` and `useSessions` for more robust state management.
 
 ### Configuration
-- **Environment**: Updated `.env` management for API keys (ElevenLabs, Gemini).
+- **Environment**: Updated `.env` management for API keys (Gemini).
 - **Expo Config**: Updated `app.json` with new plugins and permissions for microphone access.
 
 ## Recent Changes - January 2, 2026 (Latest Session)

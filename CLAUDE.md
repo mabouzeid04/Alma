@@ -28,9 +28,8 @@ cd app && npx tsc
 ## Environment Setup
 
 Copy `app/.env.example` to `app/.env` and add API keys:
-- `EXPO_PUBLIC_ELEVENLABS_API_KEY` - For speech-to-text and text-to-speech
-- `EXPO_PUBLIC_GEMINI_API_KEY` - For AI conversation and embeddings
-- `EXPO_PUBLIC_ELEVENLABS_VOICE_ID` - Optional custom voice
+- `EXPO_PUBLIC_GEMINI_API_KEY` - For STT, TTS, AI conversation, and embeddings
+- `EXPO_PUBLIC_GEMINI_TTS_VOICE` - Optional TTS voice name (default: Kore)
 
 ## Architecture
 
@@ -66,9 +65,9 @@ The AI service (`app/src/services/ai.ts`) implements:
 
 **Conversation Flow:**
 1. User taps record → audio captured via expo-av
-2. Audio transcribed via ElevenLabs Scribe API
+2. Audio transcribed via Gemini multimodal (gemini-2.5-flash)
 3. Response generated via Gemini with personal facts + relevant memories in context
-4. Response spoken via ElevenLabs TTS
+4. Response spoken via Gemini TTS (gemini-2.5-flash-preview-tts)
 
 **Session End Flow:**
 1. Memory synthesized (Gemini extracts structured insights)
@@ -78,8 +77,7 @@ The AI service (`app/src/services/ai.ts`) implements:
 
 ### External APIs
 
-- **ElevenLabs** (`api.elevenlabs.io/v1`): Speech-to-text (Scribe), Text-to-speech (eleven_turbo_v2_5)
-- **Gemini** (`generativelanguage.googleapis.com/v1beta`): Conversation (gemini-3-flash-preview), Embeddings (text-embedding-004)
+- **Gemini** (`generativelanguage.googleapis.com/v1beta`): STT (gemini-2.5-flash), TTS (gemini-2.5-flash-preview-tts), Conversation (gemini-3-flash-preview), Embeddings (text-embedding-004)
 
 ### Database Schema
 

@@ -198,7 +198,9 @@ export async function playAudio(uri: string): Promise<void> {
     if (uri.startsWith('data:')) {
       console.log('Converting base64 audio to file...');
       const base64Data = uri.split(',')[1];
-      const tempFileName = `temp_audio_${tempFileCounter++}.mp3`;
+      const mimeType = uri.split(';')[0].split(':')[1];
+      const ext = mimeType === 'audio/wav' ? '.wav' : '.mp3';
+      const tempFileName = `temp_audio_${tempFileCounter++}${ext}`;
 
       // Use new expo-file-system API
       const tempFile = new File(Paths.cache, tempFileName);

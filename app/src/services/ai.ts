@@ -7,25 +7,26 @@
  * 3. Session Memory Nodes (structured summaries per session)
  * 4. Vector Embeddings (semantic search)
  *
- * Uses ElevenLabs for voice (REST API) and supports Gemini, Grok, and GPT.
+ * Uses Gemini for voice (STT/TTS) and supports Gemini, Grok, and GPT for conversation.
  */
 
 import { Message, MemoryNode, MemoryVector, JournalSession, ConversationContext } from '../types';
 import { v4 as uuid } from 'uuid';
 import { fetchWithRetry, createTimeoutController } from './api-utils';
+import { readAsStringAsync, EncodingType } from 'expo-file-system/legacy';
 
 // =============================================================================
 // Configuration
 // =============================================================================
 
-const ELEVENLABS_API_KEY = process.env.EXPO_PUBLIC_ELEVENLABS_API_KEY || '';
 const GEMINI_API_KEY = process.env.EXPO_PUBLIC_GEMINI_API_KEY || '';
 const OPENAI_API_KEY = process.env.EXPO_PUBLIC_OPENAI_API_KEY || '';
 const XAI_API_KEY = process.env.EXPO_PUBLIC_XAI_API_KEY || '';
-const ELEVENLABS_VOICE_ID = process.env.EXPO_PUBLIC_ELEVENLABS_VOICE_ID || 'EXAVITQu4vr4xnSDxMaL'; // Sarah - warm, friendly
 
-const ELEVENLABS_API_URL = 'https://api.elevenlabs.io/v1';
 const GEMINI_API_URL = 'https://generativelanguage.googleapis.com/v1beta';
+const GEMINI_STT_MODEL = 'gemini-2.0-flash';
+const GEMINI_TTS_MODEL = 'gemini-2.5-flash-preview-tts';
+const GEMINI_TTS_VOICE = process.env.EXPO_PUBLIC_GEMINI_TTS_VOICE || 'Kore';
 const OPENAI_API_URL = 'https://api.openai.com/v1';
 const XAI_API_URL = 'https://api.x.ai/v1';
 
@@ -57,12 +58,11 @@ interface ModelPreference {
 // =============================================================================
 
 export interface AIConfig {
-  elevenLabsApiKey?: string;
   geminiApiKey?: string;
   openAiApiKey?: string;
   xaiApiKey?: string;
   preferredModel?: Partial<ModelPreference>;
-  voiceId?: string;
+  ttsVoice?: string;
 }
 
 export interface TranscriptionResult {
@@ -82,7 +82,7 @@ type ChatMessage = { role: 'system' | 'user' | 'assistant'; content: string };
 // =============================================================================
 
 let isInitialized = false;
-let activeVoiceId = ELEVENLABS_VOICE_ID;
+let activeTtsVoice = GEMINI_TTS_VOICE;
 let activeGeminiApiKey = GEMINI_API_KEY;
 let activeOpenAiApiKey = OPENAI_API_KEY;
 let activeXaiApiKey = XAI_API_KEY;
@@ -96,8 +96,8 @@ let preferredModel: Partial<ModelPreference> = {
 // =============================================================================
 
 export async function initializeAI(config?: AIConfig): Promise<void> {
-  if (config?.voiceId) {
-    activeVoiceId = config.voiceId;
+  if (config?.ttsVoice) {
+    activeTtsVoice = config.ttsVoice;
   }
 
   if (config?.geminiApiKey) {
@@ -116,13 +116,12 @@ export async function initializeAI(config?: AIConfig): Promise<void> {
     preferredModel = { ...preferredModel, ...config.preferredModel };
   }
 
-  const hasElevenLabs = !!(config?.elevenLabsApiKey || ELEVENLABS_API_KEY);
   const hasGemini = !!(config?.geminiApiKey || GEMINI_API_KEY);
   const hasOpenAi = !!(config?.openAiApiKey || OPENAI_API_KEY);
   const hasXai = !!(config?.xaiApiKey || XAI_API_KEY);
 
-  if (!hasElevenLabs || !hasGemini) {
-    console.warn('⚠️ Missing API keys. Set EXPO_PUBLIC_ELEVENLABS_API_KEY and EXPO_PUBLIC_GEMINI_API_KEY');
+  if (!hasGemini) {
+    console.warn('⚠️ Missing Gemini API key. Set EXPO_PUBLIC_GEMINI_API_KEY (required for STT, TTS, and conversation)');
   }
 
   if (!hasOpenAi) {
@@ -138,39 +137,57 @@ export async function initializeAI(config?: AIConfig): Promise<void> {
 }
 
 // =============================================================================
-// Speech-to-Text (ElevenLabs Scribe)
+// Speech-to-Text (Gemini Multimodal)
 // =============================================================================
 
 export async function transcribeAudio(audioUri: string): Promise<TranscriptionResult> {
-  if (!ELEVENLABS_API_KEY) {
+  if (!activeGeminiApiKey) {
     return { text: '[No API key - transcription unavailable]', confidence: 0 };
   }
 
   try {
     console.log('🎙️ Starting transcription for:', audioUri);
 
-    // Create form data with React Native compatible file object
-    const formData = new FormData();
+    // Read audio file as base64 (native encoding — fast)
+    const base64Audio = await readAsStringAsync(audioUri, { encoding: EncodingType.Base64 });
+    console.log('📦 Audio file read, base64 length:', base64Audio.length);
 
-    // React Native requires this specific format for file uploads
-    formData.append('file', {
-      uri: audioUri,
-      type: 'audio/m4a',
-      name: 'recording.m4a',
-    } as any);
-    formData.append('model_id', 'scribe_v1');
-    formData.append('language_code', 'eng'); // Force English transcription
+    console.log('📤 Sending to Gemini for transcription...');
 
-    console.log('📤 Sending to ElevenLabs Scribe API...');
-    const response = await fetch(`${ELEVENLABS_API_URL}/speech-to-text`, {
-      method: 'POST',
-      headers: {
-        'xi-api-key': ELEVENLABS_API_KEY,
-        // Don't set Content-Type - fetch will set it automatically with boundary
+    const { controller, timeoutId } = createTimeoutController(45000);
+    const requestBody = JSON.stringify({
+      contents: [{
+        parts: [
+          {
+            inline_data: {
+              mime_type: 'audio/mp4',
+              data: base64Audio,
+            },
+          },
+          {
+            text: 'Transcribe this audio recording accurately. Return only the transcription text, nothing else. Do not add any commentary, labels, or formatting.',
+          },
+        ],
+      }],
+      generationConfig: {
+        temperature: 0.0,
+        maxOutputTokens: 4000,
       },
-      body: formData,
     });
 
+    const response = await fetchWithRetry(
+      `${GEMINI_API_URL}/models/${GEMINI_STT_MODEL}:generateContent?key=${activeGeminiApiKey}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: requestBody,
+        signal: controller.signal,
+      },
+      2,
+      2000
+    );
+
+    clearTimeout(timeoutId);
     console.log('📡 Transcription response status:', response.status);
 
     if (!response.ok) {
@@ -180,11 +197,12 @@ export async function transcribeAudio(audioUri: string): Promise<TranscriptionRe
     }
 
     const result = await response.json();
-    console.log('✅ Transcription result:', result.text?.substring(0, 50));
+    const text = result.candidates?.[0]?.content?.parts?.[0]?.text || '';
+    console.log('✅ Transcription result:', text?.substring(0, 50));
 
     return {
-      text: result.text || '',
-      confidence: result.confidence || 0.9,
+      text: text.trim(),
+      confidence: 0.95,
     };
   } catch (error) {
     console.error('Transcription error:', error);
@@ -193,43 +211,46 @@ export async function transcribeAudio(audioUri: string): Promise<TranscriptionRe
 }
 
 // =============================================================================
-// Text-to-Speech (ElevenLabs)
+// Text-to-Speech (Gemini TTS)
 // =============================================================================
 
 export async function synthesizeSpeech(text: string): Promise<string | null> {
-  if (!ELEVENLABS_API_KEY) {
+  if (!activeGeminiApiKey) {
     console.log('⏭️ Skipping TTS - no API key');
     return null;
   }
 
   try {
     console.log('🎤 Starting TTS for text:', text.substring(0, 50));
-    console.log('🔑 Using voice ID:', activeVoiceId);
-    console.log('🔑 API key present:', !!ELEVENLABS_API_KEY, 'length:', ELEVENLABS_API_KEY?.length);
-    console.log('🌐 TTS URL:', `${ELEVENLABS_API_URL}/text-to-speech/${activeVoiceId}`);
+    console.log('🔑 Using voice:', activeTtsVoice);
 
-    // Create abort controller for timeout
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 15000); // 15 second timeout for TTS
+    const { controller, timeoutId } = createTimeoutController(45000);
+    const requestBody = JSON.stringify({
+      contents: [{
+        parts: [{ text }],
+      }],
+      generationConfig: {
+        responseModalities: ['AUDIO'],
+        speechConfig: {
+          voiceConfig: {
+            prebuiltVoiceConfig: {
+              voiceName: activeTtsVoice,
+            },
+          },
+        },
+      },
+    });
 
-    const response = await fetch(
-      `${ELEVENLABS_API_URL}/text-to-speech/${activeVoiceId}`,
+    const response = await fetchWithRetry(
+      `${GEMINI_API_URL}/models/${GEMINI_TTS_MODEL}:generateContent?key=${activeGeminiApiKey}`,
       {
         method: 'POST',
-        headers: {
-          'xi-api-key': ELEVENLABS_API_KEY,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          text,
-          model_id: 'eleven_turbo_v2_5',
-          voice_settings: {
-            stability: 0.5,
-            similarity_boost: 0.75,
-          },
-        }),
+        headers: { 'Content-Type': 'application/json' },
+        body: requestBody,
         signal: controller.signal,
-      }
+      },
+      2,
+      2000
     );
 
     clearTimeout(timeoutId);
@@ -242,17 +263,86 @@ export async function synthesizeSpeech(text: string): Promise<string | null> {
       throw new Error(`TTS failed: ${response.status} - ${errorBody}`);
     }
 
-    // Convert to base64 data URI for React Native
-    console.log('🔄 Converting audio to base64...');
-    const audioBuffer = await response.arrayBuffer();
-    const base64 = btoa(
-      new Uint8Array(audioBuffer).reduce((data, byte) => data + String.fromCharCode(byte), '')
-    );
-    console.log('✅ TTS complete, audio size:', base64.length);
-    return `data:audio/mpeg;base64,${base64}`;
+    const result = await response.json();
+    const pcmBase64 = result.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+
+    if (!pcmBase64) {
+      console.error('❌ No audio data in TTS response');
+      return null;
+    }
+
+    // Convert PCM L16 (24kHz, mono) to WAV format
+    console.log('🔄 Converting PCM to WAV...');
+    const wavBase64 = pcmToWav(pcmBase64);
+    console.log('✅ TTS complete, WAV audio size:', wavBase64.length);
+
+    return `data:audio/wav;base64,${wavBase64}`;
   } catch (error) {
     console.error('❌ TTS error:', error);
-    return null; // Return null so conversation continues without audio
+    return null;
+  }
+}
+
+/**
+ * Converts raw PCM L16 audio (16-bit, 24kHz, mono) to WAV format
+ * by prepending a standard 44-byte WAV header.
+ */
+function pcmToWav(pcmBase64: string): string {
+  const pcmBinary = atob(pcmBase64);
+  const pcmLength = pcmBinary.length;
+
+  const numChannels = 1;
+  const sampleRate = 24000;
+  const bitsPerSample = 16;
+  const byteRate = sampleRate * numChannels * (bitsPerSample / 8);
+  const blockAlign = numChannels * (bitsPerSample / 8);
+  const dataSize = pcmLength;
+  const fileSize = 36 + dataSize;
+
+  const header = new ArrayBuffer(44);
+  const view = new DataView(header);
+
+  // RIFF chunk descriptor
+  wavWriteString(view, 0, 'RIFF');
+  view.setUint32(4, fileSize, true);
+  wavWriteString(view, 8, 'WAVE');
+
+  // fmt sub-chunk
+  wavWriteString(view, 12, 'fmt ');
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, numChannels, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, byteRate, true);
+  view.setUint16(32, blockAlign, true);
+  view.setUint16(34, bitsPerSample, true);
+
+  // data sub-chunk
+  wavWriteString(view, 36, 'data');
+  view.setUint32(40, dataSize, true);
+
+  // Combine header + PCM data
+  const wavBytes = new Uint8Array(44 + pcmLength);
+  wavBytes.set(new Uint8Array(header), 0);
+  for (let i = 0; i < pcmLength; i++) {
+    wavBytes[i + 44] = pcmBinary.charCodeAt(i);
+  }
+
+  // Convert to base64 in chunks (avoids O(n²) string concat)
+  const CHUNK = 8192;
+  let wavBinaryStr = '';
+  for (let i = 0; i < wavBytes.length; i += CHUNK) {
+    wavBinaryStr += String.fromCharCode.apply(
+      null,
+      Array.from(wavBytes.subarray(i, Math.min(i + CHUNK, wavBytes.length)))
+    );
+  }
+  return btoa(wavBinaryStr);
+}
+
+function wavWriteString(view: DataView, offset: number, str: string): void {
+  for (let i = 0; i < str.length; i++) {
+    view.setUint8(offset + i, str.charCodeAt(i));
   }
 }
 

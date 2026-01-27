@@ -2,7 +2,7 @@
  * API Utilities - Shared fetch helpers for resilient API calls
  *
  * Provides retry logic with exponential backoff and timeout handling
- * for all external API calls (Gemini, OpenAI, xAI, ElevenLabs).
+ * for all external API calls (Gemini, OpenAI, xAI).
  */
 
 /**

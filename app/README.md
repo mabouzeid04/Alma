@@ -69,7 +69,7 @@ Gemini embeddings for semantic search - finds similar past conversations based o
 ## How It Works
 
 1. **Start session** → Loads all personal facts + past memories
-2. **You talk** → Transcribed via ElevenLabs
+2. **You talk** → Transcribed via Gemini
 3. **AI responds** → Uses Gemini with:
    - Personal knowledge base (always)
    - Top 3 relevant past memories (semantic search)
@@ -82,8 +82,7 @@ Gemini embeddings for semantic search - finds similar past conversations based o
 ## Tech Stack
 
 - **React Native** (Expo)
-- **ElevenLabs** - Speech-to-text, Text-to-speech
-- **Gemini 2.0 Flash** - Conversation AI, embeddings
+- **Gemini** - STT, TTS, Conversation AI, embeddings
 - **SQLite** - Local storage
 - **TypeScript** - Type safety
 
