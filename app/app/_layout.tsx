@@ -5,12 +5,10 @@ import { useEffect } from 'react';
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
-import { StyleSheet } from 'react-native';
-import * as Linking from 'expo-linking';
+import { StyleSheet, Alert } from 'react-native';
 import { colors } from '../src/theme';
 import { useTypography } from '../src/hooks';
 import { getDatabase } from '../src/services/database';
-import { handleE2ELink } from '../src/services/e2e-bridge';
 
 export default function RootLayout() {
   // Load fonts asynchronously
@@ -20,19 +18,33 @@ export default function RootLayout() {
     // Initialize database on app start
     getDatabase();
 
-    // Handle E2E deep links for seeding/mocking
-    const applyInitialLink = async () => {
-      const initialUrl = await Linking.getInitialURL();
-      await handleE2ELink(initialUrl);
-    };
+    // Check for required API key
+    if (!process.env.EXPO_PUBLIC_GEMINI_API_KEY) {
+      Alert.alert(
+        'API Key Missing',
+        'Alma requires a Gemini API key to work. Please add EXPO_PUBLIC_GEMINI_API_KEY to your environment.',
+        [{ text: 'OK' }]
+      );
+    }
 
-    applyInitialLink();
+    if (__DEV__) {
+      // Handle E2E deep links for seeding/mocking (dev only)
+      const setupE2E = async () => {
+        const Linking = await import('expo-linking');
+        const { handleE2ELink } = await import('../src/services/e2e-bridge');
+        const initialUrl = await Linking.getInitialURL();
+        await handleE2ELink(initialUrl);
 
-    const sub = Linking.addEventListener('url', ({ url }) => {
-      handleE2ELink(url);
-    });
+        const sub = Linking.addEventListener('url', ({ url }) => {
+          handleE2ELink(url);
+        });
+        return sub;
+      };
 
-    return () => sub.remove();
+      let sub: { remove: () => void } | undefined;
+      setupE2E().then(s => { sub = s; });
+      return () => sub?.remove();
+    }
   }, []);
 
   return (

@@ -92,7 +92,7 @@ export default function HomeScreen() {
   }, [loadSessions]);
 
   const getGreetingMessage = () => {
-    const fakeHour = (globalThis as any).__E2E_FAKE_HOUR__;
+    const fakeHour = __DEV__ ? (globalThis as any).__E2E_FAKE_HOUR__ : undefined;
     const hour = typeof fakeHour === 'number' ? fakeHour : new Date().getHours();
     const name = userName ? `, ${userName}` : '';
 

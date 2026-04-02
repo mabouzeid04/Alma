@@ -1,18 +1,50 @@
-import React, { useCallback } from 'react';
-import { View, Text, StyleSheet, Pressable } from 'react-native';
+import React, { useCallback, useState } from 'react';
+import { View, Text, StyleSheet, ScrollView, Pressable, Alert, ActivityIndicator } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
-import Animated, { FadeIn } from 'react-native-reanimated';
+import Animated, { FadeIn, FadeInDown } from 'react-native-reanimated';
 import { Ionicons } from '@expo/vector-icons';
-import { colors, spacing, typography } from '../../src/theme';
+import { colors, spacing, borderRadius, typography } from '../../src/theme';
 import { haptics } from '../../src/services/haptics';
+import { clearAllSessions } from '../../src/services/database';
 
 export default function PreferencesScreen() {
   const router = useRouter();
+  const [isDeleting, setIsDeleting] = useState(false);
 
   const handleBack = useCallback(() => {
     haptics.light();
     router.back();
+  }, [router]);
+
+  const handleDeleteAllData = useCallback(() => {
+    haptics.warning();
+    Alert.alert(
+      'Delete All Data',
+      'This will permanently delete all your journal sessions, memories, patterns, theories, and personal knowledge. This cannot be undone.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete Everything',
+          style: 'destructive',
+          onPress: async () => {
+            setIsDeleting(true);
+            try {
+              await clearAllSessions();
+              haptics.medium();
+              Alert.alert('Done', 'All data has been deleted.', [
+                { text: 'OK', onPress: () => router.replace('/') },
+              ]);
+            } catch (error) {
+              console.error('Failed to delete data:', error);
+              Alert.alert('Error', 'Failed to delete data. Please try again.');
+            } finally {
+              setIsDeleting(false);
+            }
+          },
+        },
+      ]
+    );
   }, [router]);
 
   return (
@@ -39,21 +71,37 @@ export default function PreferencesScreen() {
           <View style={styles.placeholder} />
         </Animated.View>
 
-        {/* Coming Soon State */}
-        <Animated.View
-          entering={FadeIn.delay(100).duration(300)}
-          style={styles.emptyContainer}
+        <ScrollView
+          style={styles.scrollView}
+          contentContainerStyle={styles.scrollContent}
+          showsVerticalScrollIndicator={false}
         >
-          <Ionicons
-            name="settings-outline"
-            size={48}
-            color={colors.textTertiary}
-          />
-          <Text style={styles.emptyTitle}>Coming soon</Text>
-          <Text style={styles.emptySubtitle}>
-            Voice settings, notifications, and{'\n'}appearance options will be available here.
-          </Text>
-        </Animated.View>
+          {/* Data Section */}
+          <Animated.View entering={FadeInDown.delay(100).duration(300)}>
+            <Text style={styles.sectionTitle}>DATA</Text>
+
+            <Pressable
+              onPress={handleDeleteAllData}
+              disabled={isDeleting}
+              style={({ pressed }) => [
+                styles.deleteButton,
+                pressed && styles.deleteButtonPressed,
+              ]}
+            >
+              {isDeleting ? (
+                <ActivityIndicator size="small" color={colors.error} />
+              ) : (
+                <Ionicons name="trash-outline" size={20} color={colors.error} />
+              )}
+              <Text style={styles.deleteButtonText}>
+                {isDeleting ? 'Deleting...' : 'Delete All Data'}
+              </Text>
+            </Pressable>
+            <Text style={styles.deleteHint}>
+              Permanently removes all sessions, memories, patterns, and personal knowledge.
+            </Text>
+          </Animated.View>
+        </ScrollView>
       </SafeAreaView>
     </View>
   );
@@ -88,22 +136,43 @@ const styles = StyleSheet.create({
   placeholder: {
     width: 40,
   },
-  emptyContainer: {
+  scrollView: {
     flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: spacing.xl,
   },
-  emptyTitle: {
-    ...typography.bodySemibold,
-    color: colors.text,
+  scrollContent: {
+    paddingHorizontal: spacing.md,
+    paddingTop: spacing.md,
+    paddingBottom: spacing.xxxl,
+  },
+  sectionTitle: {
+    ...typography.small,
+    color: colors.textSecondary,
+    fontWeight: '600',
+    letterSpacing: 1,
+    marginBottom: spacing.sm,
     marginTop: spacing.md,
   },
-  emptySubtitle: {
-    ...typography.caption,
-    color: colors.textSecondary,
-    textAlign: 'center',
+  deleteButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    paddingVertical: spacing.md,
+    paddingHorizontal: spacing.md,
+    backgroundColor: colors.backgroundSecondary,
+    borderRadius: borderRadius.md,
+  },
+  deleteButtonPressed: {
+    opacity: 0.7,
+  },
+  deleteButtonText: {
+    ...typography.body,
+    color: colors.error,
+    fontWeight: '500',
+  },
+  deleteHint: {
+    ...typography.small,
+    color: colors.textTertiary,
     marginTop: spacing.xs,
-    lineHeight: 20,
+    paddingHorizontal: spacing.xs,
   },
 });

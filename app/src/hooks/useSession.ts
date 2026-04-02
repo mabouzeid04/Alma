@@ -1,4 +1,5 @@
 import { useState, useCallback, useRef } from 'react';
+import { Alert } from 'react-native';
 import { v4 as uuid } from 'uuid';
 import { JournalSession, Message, ConversationState, MemoryNode, MemoryVector, Prompt, ConversationContext } from '../types';
 import * as database from '../services/database';
@@ -162,100 +163,120 @@ export function useSession() {
     haptics.recordingStopped();
 
     if (result) {
-      // Show transcribing state while processing audio
-      setConversationState('transcribing');
-
-      // Transcribe audio
-      const transcription = await ai.transcribeAudio(result.uri);
-
-      // Add user message
-      const userMessage: Message = {
-        id: uuid(),
-        content: transcription.text,
-        isUser: true,
-        timestamp: new Date(),
-        audioUri: result.uri,
-      };
-
-      const updatedMessages = [...messages, userMessage];
-      setMessages(updatedMessages);
-      await database.addMessage(currentSession.id, userMessage);
-
-      // Now show processing state (after user message is visible)
-      setConversationState('processing');
-
-      // Generate AI response with full memory context
-      setConversationState('responding');
-      console.log('🎯 Starting AI response generation...');
-
-      // Layer 2: Personal Knowledge Base (ALWAYS loaded)
-      const personalKnowledge = await database.getPersonalKnowledge();
-      console.log(`📚 Loaded personal knowledge (${personalKnowledge.length} chars)`);
-
-      // Layer 3 & 4: Find relevant past memories using semantic search
-      // Use the user's latest message as context for retrieval
-      console.log('🔍 Finding relevant memories...');
-      const relevantMemories = await ai.findRelevantMemories(
-        transcription.text,
-        allMemoriesRef.current,
-        20 // Top 20 most relevant memories
-      );
-      console.log(`💭 Found ${relevantMemories.length} relevant memories`);
-
-      // Retrieve granular memory vectors (chunks/highlights)
-      const relevantMemoryVectors = await ai.findRelevantMemoryVectors(
-        transcription.text,
-        allMemoryVectorsRef.current,
-        30
-      );
-      console.log(`🧩 Found ${relevantMemoryVectors.length} memory snippets`);
-
-      // Build personalized conversation context (patterns, emotional baseline, topic history)
-      console.log('🎭 Building personalized context...');
-      let conversationContext: ConversationContext | undefined;
       try {
-        conversationContext = await buildConversationContext(
+        // Show transcribing state while processing audio
+        setConversationState('transcribing');
+
+        // Transcribe audio
+        const transcription = await ai.transcribeAudio(result.uri);
+
+        if (transcription.confidence === 0) {
+          // Transcription failed — notify user and reset
+          Alert.alert(
+            'Couldn\'t hear that',
+            'There was a problem transcribing your audio. Check your internet connection and try again.',
+            [{ text: 'OK' }]
+          );
+          setConversationState('idle');
+          return;
+        }
+
+        // Add user message
+        const userMessage: Message = {
+          id: uuid(),
+          content: transcription.text,
+          isUser: true,
+          timestamp: new Date(),
+          audioUri: result.uri,
+        };
+
+        const updatedMessages = [...messages, userMessage];
+        setMessages(updatedMessages);
+        await database.addMessage(currentSession.id, userMessage);
+
+        // Now show processing state (after user message is visible)
+        setConversationState('processing');
+
+        // Generate AI response with full memory context
+        setConversationState('responding');
+        console.log('🎯 Starting AI response generation...');
+
+        // Layer 2: Personal Knowledge Base (ALWAYS loaded)
+        const personalKnowledge = await database.getPersonalKnowledge();
+        console.log(`📚 Loaded personal knowledge (${personalKnowledge.length} chars)`);
+
+        // Layer 3 & 4: Find relevant past memories using semantic search
+        // Use the user's latest message as context for retrieval
+        console.log('🔍 Finding relevant memories...');
+        const relevantMemories = await ai.findRelevantMemories(
           transcription.text,
-          allMemoriesRef.current
+          allMemoriesRef.current,
+          20 // Top 20 most relevant memories
         );
-        console.log(`✨ Built personalized context: ${conversationContext.relevantPatterns.length} patterns, ${conversationContext.topicHistories.length} topic histories`);
+        console.log(`💭 Found ${relevantMemories.length} relevant memories`);
+
+        // Retrieve granular memory vectors (chunks/highlights)
+        const relevantMemoryVectors = await ai.findRelevantMemoryVectors(
+          transcription.text,
+          allMemoryVectorsRef.current,
+          30
+        );
+        console.log(`🧩 Found ${relevantMemoryVectors.length} memory snippets`);
+
+        // Build personalized conversation context (patterns, emotional baseline, topic history)
+        console.log('🎭 Building personalized context...');
+        let conversationContext: ConversationContext | undefined;
+        try {
+          conversationContext = await buildConversationContext(
+            transcription.text,
+            allMemoriesRef.current
+          );
+          console.log(`✨ Built personalized context: ${conversationContext.relevantPatterns.length} patterns, ${conversationContext.topicHistories.length} topic histories`);
+        } catch (error) {
+          console.warn('Failed to build conversation context:', error);
+          // Continue without personalization context - not critical
+        }
+
+        // Generate response with full context
+        console.log('⚙️ Generating AI response...');
+        const response = await ai.generateResponse(
+          updatedMessages,
+          personalKnowledge,
+          relevantMemories,
+          relevantMemoryVectors,
+          conversationContext
+        );
+        console.log('✅ AI response received:', response.text.substring(0, 50));
+
+        // Add AI response
+        const aiMessage: Message = {
+          id: uuid(),
+          content: response.text,
+          isUser: false,
+          timestamp: new Date(),
+          audioUri: response.audioUri,
+        };
+
+        console.log('💾 Adding AI message to state and database...');
+        setMessages((prev) => [...prev, aiMessage]);
+        await database.addMessage(currentSession.id, aiMessage);
+        console.log('✅ AI message saved');
+
+        haptics.aiResponse();
+
+        // Play AI response audio
+        if (response.audioUri) {
+          console.log('🔊 Playing AI response audio...');
+          await audio.playAudio(response.audioUri);
+          console.log('✅ AI response audio finished');
+        }
       } catch (error) {
-        console.warn('Failed to build conversation context:', error);
-        // Continue without personalization context - not critical
-      }
-
-      // Generate response with full context
-      console.log('⚙️ Generating AI response...');
-      const response = await ai.generateResponse(
-        updatedMessages,
-        personalKnowledge,
-        relevantMemories,
-        relevantMemoryVectors,
-        conversationContext
-      );
-      console.log('✅ AI response received:', response.text.substring(0, 50));
-
-      // Add AI response
-      const aiMessage: Message = {
-        id: uuid(),
-        content: response.text,
-        isUser: false,
-        timestamp: new Date(),
-        audioUri: response.audioUri,
-      };
-
-      console.log('💾 Adding AI message to state and database...');
-      setMessages((prev) => [...prev, aiMessage]);
-      await database.addMessage(currentSession.id, aiMessage);
-      console.log('✅ AI message saved');
-
-      haptics.aiResponse();
-
-      // Play AI response audio
-      if (response.audioUri) {
-        console.log('🔊 Playing AI response audio...');
-        await audio.playAudio(response.audioUri);
-        console.log('✅ AI response audio finished');
+        console.error('Conversation error:', error);
+        Alert.alert(
+          'Something went wrong',
+          'There was a problem processing your message. Please try again.',
+          [{ text: 'OK' }]
+        );
       }
     }
 
