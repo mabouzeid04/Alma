@@ -13,7 +13,7 @@ Install on your iPhone without $99/year Apple Developer account. App expires eve
 ### 1. Generate iOS project
 
 ```bash
-cd /Users/mahmoudabouzeid/Desktop/SecondBrain/app
+cd /path/to/SecondBrain/app
 ./scripts/first-time-setup.sh
 ```
 
@@ -60,7 +60,7 @@ Open **Second Brain** on your iPhone home screen. Works without computer.
 App expires after 7 days. To renew:
 
 ```bash
-cd /Users/mahmoudabouzeid/Desktop/SecondBrain/app
+cd /path/to/SecondBrain/app
 ./scripts/weekly-rebuild.sh
 ```
 
