@@ -15,9 +15,10 @@
     },
     "ios": {
       "supportsTablet": false,
-      "bundleIdentifier": "com.alma.app",
+      "bundleIdentifier": "com.mabouzeid.alma",
       "infoPlist": {
-        "NSMicrophoneUsageDescription": "Alma needs microphone access to record your voice journal entries."
+        "NSMicrophoneUsageDescription": "Alma needs microphone access to record your voice journal entries.",
+        "ITSAppUsesNonExemptEncryption": false
       }
     },
     "android": {
@@ -26,7 +27,9 @@
         "backgroundColor": "#F5F1E8"
       },
       "permissions": [
-        "RECORD_AUDIO"
+        "RECORD_AUDIO",
+        "android.permission.RECORD_AUDIO",
+        "android.permission.MODIFY_AUDIO_SETTINGS"
       ],
       "package": "com.alma.app",
       "edgeToEdgeEnabled": true
@@ -44,10 +47,19 @@
         {
           "microphonePermission": "Alma needs microphone access to record your voice journal entries."
         }
-      ]
+      ],
+      "expo-font",
+      "expo-asset"
     ],
     "experiments": {
       "typedRoutes": true
-    }
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "ade03fbf-4403-4740-aa64-ccab26450b8e"
+      }
+    },
+    "owner": "mabouzeid120"
   }
 }

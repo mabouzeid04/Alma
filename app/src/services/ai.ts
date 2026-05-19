@@ -7,7 +7,8 @@
  * 3. Session Memory Nodes (structured summaries per session)
  * 4. Vector Embeddings (semantic search)
  *
- * Uses Gemini for voice (STT/TTS) and supports Gemini, Grok, and GPT for conversation.
+ * Uses Gemini for voice (STT/TTS), conversation, and analysis.
+ * Optional GPT support for conversation.
  */
 
 import { Message, MemoryNode, MemoryVector, JournalSession, ConversationContext } from '../types';
@@ -21,19 +22,20 @@ import { readAsStringAsync, EncodingType } from 'expo-file-system/legacy';
 
 const GEMINI_API_KEY = process.env.EXPO_PUBLIC_GEMINI_API_KEY || '';
 const OPENAI_API_KEY = process.env.EXPO_PUBLIC_OPENAI_API_KEY || '';
-const XAI_API_KEY = process.env.EXPO_PUBLIC_XAI_API_KEY || '';
 
 const GEMINI_API_URL = 'https://generativelanguage.googleapis.com/v1beta';
-const GEMINI_STT_MODEL = 'gemini-2.0-flash';
-const GEMINI_TTS_MODEL = 'gemini-2.5-flash-preview-tts';
+const GEMINI_STT_MODEL = 'gemini-3-flash-preview';
+const GEMINI_TTS_MODEL = 'gemini-3.1-flash-tts-preview';
 const GEMINI_TTS_VOICE = process.env.EXPO_PUBLIC_GEMINI_TTS_VOICE || 'Kore';
 const OPENAI_API_URL = 'https://api.openai.com/v1';
-const XAI_API_URL = 'https://api.x.ai/v1';
+
+type ThinkingLevel = 'minimal' | 'low' | 'medium' | 'high';
+const CHAT_THINKING: ThinkingLevel = 'minimal';
+const SYNTHESIS_THINKING: ThinkingLevel = 'medium';
 
 const DEFAULT_MODELS = {
   gemini: process.env.EXPO_PUBLIC_GEMINI_MODEL || 'gemini-3-flash-preview',
   openai: process.env.EXPO_PUBLIC_OPENAI_MODEL || 'gpt-5-mini',
-  xai: process.env.EXPO_PUBLIC_XAI_MODEL || 'grok-4-1-fast-non-reasoning',
 };
 
 const MEMORY_MODEL_PROVIDER = process.env.EXPO_PUBLIC_MEMORY_MODEL_PROVIDER as ModelProvider | undefined;
@@ -46,7 +48,7 @@ const MEMORY_SIMILARITY_WEIGHT = 0.7;
 const MEMORY_RECENCY_WEIGHT = 0.3;
 const MEMORY_RECENCY_HALF_LIFE_DAYS = 60;
 
-type ModelProvider = 'gemini' | 'openai' | 'xai';
+type ModelProvider = 'gemini' | 'openai';
 
 interface ModelPreference {
   provider: ModelProvider;
@@ -60,7 +62,6 @@ interface ModelPreference {
 export interface AIConfig {
   geminiApiKey?: string;
   openAiApiKey?: string;
-  xaiApiKey?: string;
   preferredModel?: Partial<ModelPreference>;
   ttsVoice?: string;
 }
@@ -85,7 +86,6 @@ let isInitialized = false;
 let activeTtsVoice = GEMINI_TTS_VOICE;
 let activeGeminiApiKey = GEMINI_API_KEY;
 let activeOpenAiApiKey = OPENAI_API_KEY;
-let activeXaiApiKey = XAI_API_KEY;
 let preferredModel: Partial<ModelPreference> = {
   provider: process.env.EXPO_PUBLIC_PRIMARY_MODEL_PROVIDER as ModelProvider | undefined,
   model: process.env.EXPO_PUBLIC_PRIMARY_MODEL || process.env.EXPO_PUBLIC_AI_MODEL,
@@ -108,28 +108,19 @@ export async function initializeAI(config?: AIConfig): Promise<void> {
     activeOpenAiApiKey = config.openAiApiKey;
   }
 
-  if (config?.xaiApiKey) {
-    activeXaiApiKey = config.xaiApiKey;
-  }
-
   if (config?.preferredModel) {
     preferredModel = { ...preferredModel, ...config.preferredModel };
   }
 
   const hasGemini = !!(config?.geminiApiKey || GEMINI_API_KEY);
   const hasOpenAi = !!(config?.openAiApiKey || OPENAI_API_KEY);
-  const hasXai = !!(config?.xaiApiKey || XAI_API_KEY);
 
   if (!hasGemini) {
-    console.warn('⚠️ Missing Gemini API key. Set EXPO_PUBLIC_GEMINI_API_KEY (required for STT, TTS, and conversation)');
+    console.warn('⚠️ Missing Gemini API key. Set EXPO_PUBLIC_GEMINI_API_KEY (required for STT, TTS, conversation, and analysis)');
   }
 
   if (!hasOpenAi) {
     console.warn('ℹ️ OpenAI key missing. Set EXPO_PUBLIC_OPENAI_API_KEY to enable GPT models.');
-  }
-
-  if (!hasXai) {
-    console.warn('ℹ️ xAI key missing. Set EXPO_PUBLIC_XAI_API_KEY to enable Grok models.');
   }
 
   isInitialized = true;
@@ -193,7 +184,7 @@ export async function transcribeAudio(audioUri: string): Promise<TranscriptionRe
     if (!response.ok) {
       const errorText = await response.text();
       console.error('❌ Transcription error response:', errorText);
-      throw new Error(`Transcription failed: ${response.status}`);
+      throw new Error(`HTTP ${response.status}: ${errorText.slice(0, 200)}`);
     }
 
     const result = await response.json();
@@ -206,7 +197,8 @@ export async function transcribeAudio(audioUri: string): Promise<TranscriptionRe
     };
   } catch (error) {
     console.error('Transcription error:', error);
-    return { text: '[Transcription failed]', confidence: 0 };
+    const msg = error instanceof Error ? error.message : String(error);
+    return { text: `[Transcription failed: ${msg}]`, confidence: 0 };
   }
 }
 
@@ -352,8 +344,7 @@ function wavWriteString(view: DataView, offset: number, str: string): void {
 
 function inferProviderFromModelName(model?: string): ModelProvider {
   const normalized = (model || '').toLowerCase();
-  if (normalized.includes('grok') || normalized.includes('xai')) return 'xai';
-  if (normalized.includes('gpt') || normalized.includes('openai') || normalized.includes('o1') || normalized.includes('5'))
+  if (normalized.includes('gpt') || normalized.includes('openai') || normalized.startsWith('o1'))
     return 'openai';
   return 'gemini';
 }
@@ -367,16 +358,10 @@ function resolveModelPreference(overrides?: Partial<ModelPreference>): ModelPref
   const provider = merged.provider || inferProviderFromModelName(merged.model);
   const model =
     merged.model ||
-    (provider === 'openai'
-      ? DEFAULT_MODELS.openai
-      : provider === 'xai'
-      ? DEFAULT_MODELS.xai
-      : DEFAULT_MODELS.gemini);
-
-  const resolvedProvider = provider || inferProviderFromModelName(model);
+    (provider === 'openai' ? DEFAULT_MODELS.openai : DEFAULT_MODELS.gemini);
 
   return {
-    provider: resolvedProvider,
+    provider,
     model,
   };
 }
@@ -394,7 +379,7 @@ async function runPromptWithModel(
   prompt: string,
   modelPref: ModelPreference,
   signal?: AbortSignal,
-  options?: { temperature?: number; maxTokens?: number; topP?: number }
+  options?: { temperature?: number; maxTokens?: number; topP?: number; thinkingLevel?: ThinkingLevel }
 ): Promise<string> {
   const chatMessages: ChatMessage[] = [
     { role: 'system', content: 'You are a careful, structured analyst. Return only the requested output.' },
@@ -408,18 +393,11 @@ async function runPromptWithModel(
     });
   }
 
-  if (modelPref.provider === 'xai') {
-    return generateWithXAI(chatMessages, modelPref.model, signal, {
-      temperature: options?.temperature,
-      maxTokens: options?.maxTokens,
-    });
-  }
-
-  // Gemini path uses existing function; systemPrompt is unused here so pass empty
   return generateWithGemini('', prompt, modelPref.model, signal, {
     temperature: options?.temperature,
     maxTokens: options?.maxTokens,
     topP: options?.topP,
+    thinkingLevel: options?.thinkingLevel ?? SYNTHESIS_THINKING,
   });
 }
 
@@ -428,7 +406,7 @@ async function generateWithGemini(
   conversationHistory: string,
   modelId: string,
   signal?: AbortSignal,
-  options?: { temperature?: number; maxTokens?: number; topP?: number }
+  options?: { temperature?: number; maxTokens?: number; topP?: number; thinkingLevel?: ThinkingLevel }
 ): Promise<string> {
   if (!activeGeminiApiKey) {
     throw new Error('No Gemini API key found');
@@ -450,6 +428,9 @@ async function generateWithGemini(
           temperature: options?.temperature ?? 0.8,
           maxOutputTokens: options?.maxTokens ?? 300,
           topP: options?.topP ?? 0.9,
+          thinkingConfig: {
+            thinkingLevel: options?.thinkingLevel ?? CHAT_THINKING,
+          },
         },
       }),
       signal,
@@ -499,40 +480,6 @@ async function generateWithOpenAI(
   return result.choices?.[0]?.message?.content?.trim() || "What's on your mind?";
 }
 
-async function generateWithXAI(
-  chatMessages: ChatMessage[],
-  model: string,
-  signal?: AbortSignal,
-  options?: { temperature?: number; maxTokens?: number }
-): Promise<string> {
-  if (!activeXaiApiKey) {
-    throw new Error('No xAI API key found');
-  }
-
-  const response = await fetchWithRetry(`${XAI_API_URL}/chat/completions`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${activeXaiApiKey}`,
-    },
-    body: JSON.stringify({
-      model,
-      messages: chatMessages,
-      temperature: options?.temperature ?? 0.8,
-      max_tokens: options?.maxTokens ?? 300,
-    }),
-    signal,
-  });
-
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`xAI API error: ${response.status} ${errorText}`);
-  }
-
-  const result = await response.json();
-  return result.choices?.[0]?.message?.content?.trim() || "What's on your mind?";
-}
-
 export async function generateResponse(
   messages: Message[],
   personalKnowledge: string,
@@ -558,24 +505,14 @@ export async function generateResponse(
       }
     }
 
-    if (modelPreference.provider === 'xai' && activeXaiApiKey) {
-      const { controller, timeoutId } = createTimeoutController();
-      try {
-        const text = await generateWithXAI(chatMessages, modelPreference.model, controller.signal);
-        const audioUri = await synthesizeSpeech(text);
-        return { text, audioUri: audioUri || undefined };
-      } finally {
-        clearTimeout(timeoutId);
-      }
-    }
-
     const { controller, timeoutId } = createTimeoutController();
     try {
       const text = await generateWithGemini(
         systemPrompt,
         conversationHistory,
         modelPreference.provider === 'gemini' ? modelPreference.model : DEFAULT_MODELS.gemini,
-        controller.signal
+        controller.signal,
+        { thinkingLevel: CHAT_THINKING }
       );
       const audioUri = await synthesizeSpeech(text);
       return { text, audioUri: audioUri || undefined };
@@ -589,14 +526,16 @@ export async function generateResponse(
   } catch (error) {
     console.error('❌ Response generation error:', error);
 
-    if (modelPreference.provider !== 'xai' && activeXaiApiKey) {
+    if (modelPreference.provider !== 'gemini' && activeGeminiApiKey) {
       try {
         const { controller, timeoutId } = createTimeoutController();
         try {
-          const text = await generateWithXAI(
-            chatMessages,
-            DEFAULT_MODELS.xai,
-            controller.signal
+          const text = await generateWithGemini(
+            systemPrompt,
+            conversationHistory,
+            DEFAULT_MODELS.gemini,
+            controller.signal,
+            { thinkingLevel: CHAT_THINKING }
           );
           const audioUri = await synthesizeSpeech(text);
           return { text, audioUri: audioUri || undefined };
@@ -604,7 +543,7 @@ export async function generateResponse(
           clearTimeout(timeoutId);
         }
       } catch (fallbackError) {
-        console.error('❌ Grok fallback failed:', fallbackError);
+        console.error('❌ Gemini fallback failed:', fallbackError);
       }
     }
 
@@ -617,7 +556,7 @@ export async function generateResponse(
 // =============================================================================
 
 export async function synthesizeMemory(session: JournalSession): Promise<MemoryNode> {
-  const hasAnyModelKey = !!(activeGeminiApiKey || activeOpenAiApiKey || activeXaiApiKey);
+  const hasAnyModelKey = !!(activeGeminiApiKey || activeOpenAiApiKey);
   if (!hasAnyModelKey || session.messages.length === 0) {
     return createEmptyMemory(session.id);
   }
@@ -654,6 +593,7 @@ Focus on substance. If they just mentioned something in passing, don't include i
       text = await runPromptWithModel(prompt, memoryModelPref, controller.signal, {
         temperature: 0.2,
         maxTokens: 2000,
+        thinkingLevel: SYNTHESIS_THINKING,
       });
     } catch (error) {
       console.error('Memory model failed, attempting Gemini fallback:', error);
@@ -662,7 +602,7 @@ Focus on substance. If they just mentioned something in passing, don't include i
           prompt,
           { provider: 'gemini', model: DEFAULT_MODELS.gemini },
           controller.signal,
-          { temperature: 0.2, maxTokens: 2000 }
+          { temperature: 0.2, maxTokens: 2000, thinkingLevel: SYNTHESIS_THINKING }
         );
       } else {
         throw error;
@@ -802,7 +742,7 @@ export async function generateMemoryVectors(
  * Each fact is timestamped with last-modified date.
  */
 export async function updatePersonalKnowledge(session: JournalSession): Promise<void> {
-  const hasAnyModelKey = !!(activeGeminiApiKey || activeOpenAiApiKey || activeXaiApiKey);
+  const hasAnyModelKey = !!(activeGeminiApiKey || activeOpenAiApiKey);
   if (!hasAnyModelKey || session.messages.length === 0) {
     return;
   }
@@ -859,6 +799,7 @@ If there's NOTHING to update, respond with exactly: NO_CHANGES`;
       text = await runPromptWithModel(prompt, knowledgeModelPref, controller.signal, {
         temperature: 0.1,
         maxTokens: 1000,
+        thinkingLevel: SYNTHESIS_THINKING,
       });
     } catch (error) {
       console.error('Knowledge model failed, attempting Gemini fallback:', error);
@@ -867,7 +808,7 @@ If there's NOTHING to update, respond with exactly: NO_CHANGES`;
           prompt,
           { provider: 'gemini', model: DEFAULT_MODELS.gemini },
           controller.signal,
-          { temperature: 0.1, maxTokens: 1000 }
+          { temperature: 0.1, maxTokens: 1000, thinkingLevel: SYNTHESIS_THINKING }
         );
       } else {
         throw error;
@@ -1193,11 +1134,7 @@ function resolveEmbeddingPreference(): ModelPreference {
   const provider = EMBEDDING_MODEL_PROVIDER || 'gemini';
   const model =
     EMBEDDING_MODEL ||
-    (provider === 'openai'
-      ? 'text-embedding-3-small'
-      : provider === 'xai'
-      ? DEFAULT_MODELS.xai
-      : 'text-embedding-004');
+    (provider === 'openai' ? 'text-embedding-3-small' : 'text-embedding-004');
 
   return { provider, model };
 }
@@ -1211,14 +1148,6 @@ async function generateEmbedding(text: string): Promise<number[] | undefined> {
     const embeddingPref = resolveEmbeddingPreference();
     if (embeddingPref.provider === 'openai') {
       return await embedWithOpenAI(text, embeddingPref.model);
-    }
-
-    if (embeddingPref.provider === 'xai') {
-      console.warn('⚠️ xAI embeddings not supported; falling back to Gemini if available');
-      if (activeGeminiApiKey) {
-        return await embedWithGemini(text, 'text-embedding-004');
-      }
-      return undefined;
     }
 
     return await embedWithGemini(text, embeddingPref.model);

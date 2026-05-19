@@ -14,13 +14,10 @@ import { fetchWithRetry, createTimeoutController } from './api-utils';
 
 // Configuration
 const GEMINI_API_KEY = process.env.EXPO_PUBLIC_GEMINI_API_KEY || '';
-const XAI_API_KEY = process.env.EXPO_PUBLIC_XAI_API_KEY || '';
 const GEMINI_API_URL = 'https://generativelanguage.googleapis.com/v1beta';
-const XAI_API_URL = 'https://api.x.ai/v1';
 
-// Prompt generation model preference
-const PROMPT_MODEL_PROVIDER = process.env.EXPO_PUBLIC_PROMPT_MODEL_PROVIDER || 'xai';
-const PROMPT_MODEL = process.env.EXPO_PUBLIC_PROMPT_MODEL || 'grok-4-1-fast-non-reasoning';
+const PROMPT_MODEL = process.env.EXPO_PUBLIC_PROMPT_MODEL || 'gemini-3-flash-preview';
+const SYNTHESIS_THINKING_LEVEL = 'medium';
 
 // Constants
 const MIN_SESSIONS_FOR_PROMPTS = 3;
@@ -31,29 +28,22 @@ const SESSIONS_LOOKBACK_DAYS = 90; // 3 months
 // LLM Integration
 // =============================================================================
 
-type ChatMessage = { role: 'system' | 'user' | 'assistant'; content: string };
-
 async function runPromptGeneration(prompt: string): Promise<string> {
   const { controller, timeoutId } = createTimeoutController(60000);
 
   try {
-    if (PROMPT_MODEL_PROVIDER === 'xai' && XAI_API_KEY) {
-      return await generateWithXAI(prompt, controller.signal);
+    if (!GEMINI_API_KEY) {
+      throw new Error('No Gemini API key available for prompt generation');
     }
-    if (GEMINI_API_KEY) {
-      return await generateWithGemini(prompt, controller.signal);
-    }
-    throw new Error('No API key available for prompt generation');
+    return await generateWithGemini(prompt, controller.signal);
   } finally {
     clearTimeout(timeoutId);
   }
 }
 
 async function generateWithGemini(prompt: string, signal?: AbortSignal): Promise<string> {
-  const model = PROMPT_MODEL_PROVIDER === 'gemini' ? PROMPT_MODEL : 'gemini-2.0-flash';
-
   const response = await fetchWithRetry(
-    `${GEMINI_API_URL}/models/${model}:generateContent?key=${GEMINI_API_KEY}`,
+    `${GEMINI_API_URL}/models/${PROMPT_MODEL}:generateContent?key=${GEMINI_API_KEY}`,
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -63,6 +53,9 @@ async function generateWithGemini(prompt: string, signal?: AbortSignal): Promise
           temperature: 0.7,
           maxOutputTokens: 2000,
           topP: 0.9,
+          thinkingConfig: {
+            thinkingLevel: SYNTHESIS_THINKING_LEVEL,
+          },
         },
       }),
       signal,
@@ -76,36 +69,6 @@ async function generateWithGemini(prompt: string, signal?: AbortSignal): Promise
 
   const result = await response.json();
   return result.candidates?.[0]?.content?.parts?.[0]?.text || '';
-}
-
-async function generateWithXAI(prompt: string, signal?: AbortSignal): Promise<string> {
-  const messages: ChatMessage[] = [
-    { role: 'system', content: 'You are a thoughtful friend helping generate journaling prompts. Return only the requested JSON output.' },
-    { role: 'user', content: prompt },
-  ];
-
-  const response = await fetchWithRetry(`${XAI_API_URL}/chat/completions`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${XAI_API_KEY}`,
-    },
-    body: JSON.stringify({
-      model: PROMPT_MODEL,
-      messages,
-      temperature: 0.7,
-      max_tokens: 2000,
-    }),
-    signal,
-  });
-
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`xAI API error: ${response.status} ${errorText}`);
-  }
-
-  const result = await response.json();
-  return result.choices?.[0]?.message?.content?.trim() || '';
 }
 
 // =============================================================================

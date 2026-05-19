@@ -174,7 +174,7 @@ export function useSession() {
           // Transcription failed — notify user and reset
           Alert.alert(
             'Couldn\'t hear that',
-            'There was a problem transcribing your audio. Check your internet connection and try again.',
+            transcription.text || 'There was a problem transcribing your audio. Check your internet connection and try again.',
             [{ text: 'OK' }]
           );
           setConversationState('idle');

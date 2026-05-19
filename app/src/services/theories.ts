@@ -17,13 +17,10 @@ import { fetchWithRetry, createTimeoutController } from './api-utils';
 
 // Configuration
 const GEMINI_API_KEY = process.env.EXPO_PUBLIC_GEMINI_API_KEY || '';
-const XAI_API_KEY = process.env.EXPO_PUBLIC_XAI_API_KEY || '';
 const GEMINI_API_URL = 'https://generativelanguage.googleapis.com/v1beta';
-const XAI_API_URL = 'https://api.x.ai/v1';
 
-// Theory model preference (use analytical model)
-const THEORY_MODEL_PROVIDER = process.env.EXPO_PUBLIC_THEORY_MODEL_PROVIDER || 'xai';
-const THEORY_MODEL = process.env.EXPO_PUBLIC_THEORY_MODEL || 'grok-4-1-fast-non-reasoning';
+const THEORY_MODEL = process.env.EXPO_PUBLIC_THEORY_MODEL || 'gemini-3-flash-preview';
+const SYNTHESIS_THINKING_LEVEL = 'medium';
 
 // Thresholds - HIGHER than patterns
 const MIN_SESSIONS_FOR_CONFIDENT = 10;
@@ -36,29 +33,22 @@ const QUESTIONING_THRESHOLD = 0.4; // Below this, theory enters questioning stat
 // LLM Integration
 // =============================================================================
 
-type ChatMessage = { role: 'system' | 'user' | 'assistant'; content: string };
-
 async function runTheoryPrompt(prompt: string): Promise<string> {
   const { controller, timeoutId } = createTimeoutController(90000); // 90s for theory analysis
 
   try {
-    if (THEORY_MODEL_PROVIDER === 'xai' && XAI_API_KEY) {
-      return await generateWithXAI(prompt, controller.signal);
+    if (!GEMINI_API_KEY) {
+      throw new Error('No Gemini API key available for theory detection');
     }
-    if (GEMINI_API_KEY) {
-      return await generateWithGemini(prompt, controller.signal);
-    }
-    throw new Error('No API key available for theory detection');
+    return await generateWithGemini(prompt, controller.signal);
   } finally {
     clearTimeout(timeoutId);
   }
 }
 
 async function generateWithGemini(prompt: string, signal?: AbortSignal): Promise<string> {
-  const model = THEORY_MODEL_PROVIDER === 'gemini' ? THEORY_MODEL : 'gemini-2.0-flash';
-
   const response = await fetchWithRetry(
-    `${GEMINI_API_URL}/models/${model}:generateContent?key=${GEMINI_API_KEY}`,
+    `${GEMINI_API_URL}/models/${THEORY_MODEL}:generateContent?key=${GEMINI_API_KEY}`,
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -68,6 +58,9 @@ async function generateWithGemini(prompt: string, signal?: AbortSignal): Promise
           temperature: 0.4, // Lower temperature for more analytical responses
           maxOutputTokens: 4000,
           topP: 0.9,
+          thinkingConfig: {
+            thinkingLevel: SYNTHESIS_THINKING_LEVEL,
+          },
         },
       }),
       signal,
@@ -81,39 +74,6 @@ async function generateWithGemini(prompt: string, signal?: AbortSignal): Promise
 
   const result = await response.json();
   return result.candidates?.[0]?.content?.parts?.[0]?.text || '';
-}
-
-async function generateWithXAI(prompt: string, signal?: AbortSignal): Promise<string> {
-  const messages: ChatMessage[] = [
-    {
-      role: 'system',
-      content: 'You are a thoughtful psychologist helping understand someone through their journal entries. Your theories should be insightful but humble - they are working hypotheses, not diagnoses. Return only the requested JSON output.',
-    },
-    { role: 'user', content: prompt },
-  ];
-
-  const response = await fetchWithRetry(`${XAI_API_URL}/chat/completions`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${XAI_API_KEY}`,
-    },
-    body: JSON.stringify({
-      model: THEORY_MODEL,
-      messages,
-      temperature: 0.4,
-      max_tokens: 4000,
-    }),
-    signal,
-  });
-
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`xAI API error: ${response.status} ${errorText}`);
-  }
-
-  const result = await response.json();
-  return result.choices?.[0]?.message?.content?.trim() || '';
 }
 
 // =============================================================================

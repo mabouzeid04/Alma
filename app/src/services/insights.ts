@@ -35,21 +35,20 @@ import { fetchWithRetry, createTimeoutController } from './api-utils';
 
 const GEMINI_API_KEY = process.env.EXPO_PUBLIC_GEMINI_API_KEY || '';
 const OPENAI_API_KEY = process.env.EXPO_PUBLIC_OPENAI_API_KEY || '';
-const XAI_API_KEY = process.env.EXPO_PUBLIC_XAI_API_KEY || '';
 
 const GEMINI_API_URL = 'https://generativelanguage.googleapis.com/v1beta';
 const OPENAI_API_URL = 'https://api.openai.com/v1';
-const XAI_API_URL = 'https://api.x.ai/v1';
 
 const INSIGHTS_MODEL_PROVIDER = process.env.EXPO_PUBLIC_INSIGHTS_MODEL_PROVIDER as ModelProvider | undefined;
 const INSIGHTS_MODEL = process.env.EXPO_PUBLIC_INSIGHTS_MODEL;
 
-type ModelProvider = 'gemini' | 'openai' | 'xai';
+type ModelProvider = 'gemini' | 'openai';
+
+const SYNTHESIS_THINKING_LEVEL = 'medium';
 
 const DEFAULT_MODELS = {
-  gemini: 'gemini-2.0-flash',
+  gemini: 'gemini-3-flash-preview',
   openai: 'gpt-5-mini',
-  xai: 'grok-4-1-fast-non-reasoning',
 };
 
 // Minimum sessions required to generate meaningful insights
@@ -152,7 +151,7 @@ async function generateInsightsReport(
   memoryNodes: MemoryNode[],
   period: InsightPeriod
 ): Promise<InsightsReport | null> {
-  const hasAnyModelKey = !!(GEMINI_API_KEY || OPENAI_API_KEY || XAI_API_KEY);
+  const hasAnyModelKey = !!(GEMINI_API_KEY || OPENAI_API_KEY);
   if (!hasAnyModelKey) {
     console.warn('No API key available for insights generation');
     return null;
@@ -251,21 +250,16 @@ async function prepareAnalysisData(memoryNodes: MemoryNode[], period: InsightPer
 // Helper functions
 function inferProviderFromModelName(model?: string): ModelProvider {
   const normalized = (model || '').toLowerCase();
-  if (normalized.includes('gemini')) return 'gemini';
-  if (normalized.includes('gpt') || normalized.includes('openai') || normalized.includes('o1') || normalized.includes('5'))
+  if (normalized.includes('gpt') || normalized.includes('openai') || normalized.startsWith('o1'))
     return 'openai';
-  return 'xai';
+  return 'gemini';
 }
 
 function resolveInsightsModelPreference(): { provider: ModelProvider; model: string } {
   const provider = INSIGHTS_MODEL_PROVIDER || inferProviderFromModelName(INSIGHTS_MODEL);
   const model =
     INSIGHTS_MODEL ||
-    (provider === 'openai'
-      ? DEFAULT_MODELS.openai
-      : provider === 'gemini'
-      ? DEFAULT_MODELS.gemini
-      : DEFAULT_MODELS.xai);
+    (provider === 'openai' ? DEFAULT_MODELS.openai : DEFAULT_MODELS.gemini);
 
   return { provider, model };
 }
@@ -279,13 +273,8 @@ async function callInsightsAI(data: AnalysisData): Promise<string | null> {
       return await callOpenAI(prompt, modelPref.model);
     }
 
-    if (modelPref.provider === 'gemini' && GEMINI_API_KEY) {
-      return await callGemini(prompt, modelPref.model);
-    }
-
-    // Default to xAI (Grok)
-    if (XAI_API_KEY) {
-      return await callXAI(prompt, modelPref.provider === 'xai' ? modelPref.model : DEFAULT_MODELS.xai);
+    if (GEMINI_API_KEY) {
+      return await callGemini(prompt, modelPref.provider === 'gemini' ? modelPref.model : DEFAULT_MODELS.gemini);
     }
 
     console.error('No API key available for insights');
@@ -293,13 +282,12 @@ async function callInsightsAI(data: AnalysisData): Promise<string | null> {
   } catch (error) {
     console.error('Error calling insights AI:', error);
 
-    // Fallback to Grok if primary fails
-    if (modelPref.provider !== 'xai' && XAI_API_KEY) {
+    if (modelPref.provider !== 'gemini' && GEMINI_API_KEY) {
       try {
-        console.log('Falling back to Grok for insights');
-        return await callXAI(prompt, DEFAULT_MODELS.xai);
+        console.log('Falling back to Gemini for insights');
+        return await callGemini(prompt, DEFAULT_MODELS.gemini);
       } catch (fallbackError) {
-        console.error('Grok fallback failed:', fallbackError);
+        console.error('Gemini fallback failed:', fallbackError);
       }
     }
 
@@ -327,6 +315,9 @@ async function callGemini(prompt: string, model: string): Promise<string | null>
             temperature: 0.7,
             maxOutputTokens: 2000,
             topP: 0.9,
+            thinkingConfig: {
+              thinkingLevel: SYNTHESIS_THINKING_LEVEL,
+            },
           },
         }),
         signal: controller.signal,
@@ -370,40 +361,6 @@ async function callOpenAI(prompt: string, model: string): Promise<string | null>
     if (!response.ok) {
       const errorText = await response.text();
       throw new Error(`OpenAI API error: ${response.status} ${errorText}`);
-    }
-
-    const result = await response.json();
-    return result.choices?.[0]?.message?.content?.trim() || null;
-  } finally {
-    clearTimeout(timeoutId);
-  }
-}
-
-async function callXAI(prompt: string, model: string): Promise<string | null> {
-  const { controller, timeoutId } = createTimeoutController(10000); // 60s timeout for insights
-
-  try {
-    const response = await fetchWithRetry(`${XAI_API_URL}/chat/completions`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${XAI_API_KEY}`,
-      },
-      body: JSON.stringify({
-        model,
-        messages: [
-          { role: 'system', content: 'You are a careful, structured analyst. Return only the requested JSON output.' },
-          { role: 'user', content: prompt },
-        ],
-        temperature: 0.7,
-        max_tokens: 2000,
-      }),
-      signal: controller.signal,
-    });
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(`xAI API error: ${response.status} ${errorText}`);
     }
 
     const result = await response.json();
