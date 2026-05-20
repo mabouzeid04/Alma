@@ -47,7 +47,7 @@ type ModelProvider = 'gemini' | 'openai';
 const SYNTHESIS_THINKING_LEVEL = 'medium';
 
 const DEFAULT_MODELS = {
-  gemini: 'gemini-3-flash-preview',
+  gemini: 'gemini-3.1-flash-preview',
   openai: 'gpt-5-mini',
 };
 

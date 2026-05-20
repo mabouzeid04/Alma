@@ -19,7 +19,7 @@ import { fetchWithRetry, createTimeoutController } from './api-utils';
 const GEMINI_API_KEY = process.env.EXPO_PUBLIC_GEMINI_API_KEY || '';
 const GEMINI_API_URL = 'https://generativelanguage.googleapis.com/v1beta';
 
-const THEORY_MODEL = process.env.EXPO_PUBLIC_THEORY_MODEL || 'gemini-3-flash-preview';
+const THEORY_MODEL = process.env.EXPO_PUBLIC_THEORY_MODEL || 'gemini-3.1-flash-preview';
 const SYNTHESIS_THINKING_LEVEL = 'medium';
 
 // Thresholds - HIGHER than patterns

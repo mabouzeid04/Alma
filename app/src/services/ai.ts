@@ -34,7 +34,7 @@ const CHAT_THINKING: ThinkingLevel = 'minimal';
 const SYNTHESIS_THINKING: ThinkingLevel = 'medium';
 
 const DEFAULT_MODELS = {
-  gemini: process.env.EXPO_PUBLIC_GEMINI_MODEL || 'gemini-3-flash-preview',
+  gemini: process.env.EXPO_PUBLIC_GEMINI_MODEL || 'gemini-3.1-flash-preview',
   openai: process.env.EXPO_PUBLIC_OPENAI_MODEL || 'gpt-5-mini',
 };
 
@@ -143,6 +143,14 @@ export async function transcribeAudio(audioUri: string): Promise<TranscriptionRe
     const base64Audio = await readAsStringAsync(audioUri, { encoding: EncodingType.Base64 });
     console.log('📦 Audio file read, base64 length:', base64Audio.length);
 
+    // Detect container: the Live API recording config produces WAV/PCM, the
+    // REST preset produces AAC. Mislabelling the mime type breaks transcription.
+    const header = atob(base64Audio.slice(0, 16));
+    const mimeType =
+      header.slice(0, 4) === 'RIFF' && header.slice(8, 12) === 'WAVE'
+        ? 'audio/wav'
+        : 'audio/mp4';
+
     console.log('📤 Sending to Gemini for transcription...');
 
     const { controller, timeoutId } = createTimeoutController(45000);
@@ -151,7 +159,7 @@ export async function transcribeAudio(audioUri: string): Promise<TranscriptionRe
         parts: [
           {
             inline_data: {
-              mime_type: 'audio/mp4',
+              mime_type: mimeType,
               data: base64Audio,
             },
           },
@@ -1306,11 +1314,19 @@ function formatTranscriptForAnalysis(messages: Message[]): string {
     .join('\n');
 }
 
-function buildSystemPrompt(
+export interface SystemPromptOptions {
+  /** 'rest' = per-turn REST call, 'live' = one Live API session. */
+  mode?: 'rest' | 'live';
+  /** In live mode, the exact opening line the model should speak first. */
+  greeting?: string;
+}
+
+export function buildSystemPrompt(
   personalKnowledge: string,
   relevantMemories: MemoryNode[],
   relevantMemoryVectors: MemoryVector[],
-  conversationContext?: ConversationContext
+  conversationContext?: ConversationContext,
+  options?: SystemPromptOptions
 ): string {
   let prompt = `Your name is Alma. You are a thoughtful friend helping someone journal through voice conversation.
 
@@ -1451,7 +1467,15 @@ RESPONSE LENGTH:
     }
   }
 
-  prompt += '\n\nNow respond to their latest message:';
+  if (options?.mode === 'live') {
+    prompt += '\n\nThis is a live voice conversation — you hear them and speak back.';
+    if (options.greeting) {
+      prompt += ` To open the session, warmly say exactly this and nothing else first: "${options.greeting}"`;
+    }
+    prompt += ' After that, respond naturally and briefly as the conversation flows.';
+  } else {
+    prompt += '\n\nNow respond to their latest message:';
+  }
 
   return prompt;
 }

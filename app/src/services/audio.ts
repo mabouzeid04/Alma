@@ -1,14 +1,16 @@
-import { 
+import {
   AudioModule,
-  createAudioPlayer, 
+  createAudioPlayer,
   requestRecordingPermissionsAsync,
   setAudioModeAsync,
   RecordingPresets,
   type AudioPlayer,
-  type AudioRecorder
+  type AudioRecorder,
+  type RecordingOptions
 } from 'expo-audio';
 import { Platform } from 'react-native';
 import { File, Paths } from 'expo-file-system';
+import { readAsStringAsync, EncodingType } from 'expo-file-system/legacy';
 
 let recorder: AudioRecorder | null = null;
 let player: AudioPlayer | null = null;
@@ -20,6 +22,34 @@ export interface AudioRecordingResult {
   uri: string;
   duration: number;
 }
+
+// When the Live API is enabled the recorder must produce raw 16-bit PCM at
+// 16kHz mono (Live API does not accept AAC). iOS records this directly as a
+// WAV via LINEARPCM; Android's MediaRecorder cannot emit raw PCM, so the
+// Android path here is best-effort pending the device spike in
+// docs/live-api-refactor.md.
+const USE_LIVE_API = process.env.EXPO_PUBLIC_USE_LIVE_API === 'true';
+
+const PCM_RECORDING_OPTIONS = {
+  ...RecordingPresets.HIGH_QUALITY,
+  extension: '.wav',
+  sampleRate: 16000,
+  numberOfChannels: 1,
+  ios: {
+    ...RecordingPresets.HIGH_QUALITY.ios,
+    extension: '.wav',
+    outputFormat: 'lpcm',
+    linearPCMBitDepth: 16,
+    linearPCMIsBigEndian: false,
+    linearPCMIsFloat: false,
+  },
+  android: {
+    ...RecordingPresets.HIGH_QUALITY.android,
+    extension: '.wav',
+    sampleRate: 16000,
+    numberOfChannels: 1,
+  },
+} as unknown as RecordingOptions;
 
 export async function requestPermissions(): Promise<boolean> {
   const { granted } = await requestRecordingPermissionsAsync();
@@ -51,11 +81,13 @@ export async function startRecording(onMeteringUpdate?: (level: number) => void)
     // Store the metering callback
     meteringCallback = onMeteringUpdate || null;
 
-    // Create recorder with high-quality settings
-    const recordingOptions = {
-      ...RecordingPresets.HIGH_QUALITY,
-      numberOfChannels: 1, // Override to mono for voice recording
-    };
+    // Live API needs raw PCM; the REST pipeline uses the AAC preset.
+    const recordingOptions: RecordingOptions = USE_LIVE_API
+      ? PCM_RECORDING_OPTIONS
+      : ({
+          ...RecordingPresets.HIGH_QUALITY,
+          numberOfChannels: 1, // Override to mono for voice recording
+        } as RecordingOptions);
     recorder = new AudioModule.AudioRecorder(recordingOptions);
 
     // Prepare and start recording
@@ -262,4 +294,131 @@ export async function stopPlayback(): Promise<void> {
 
 export function isRecording(): boolean {
   return recorder !== null;
+}
+
+// =============================================================================
+// Live API audio helpers (raw PCM)
+// =============================================================================
+
+/**
+ * Reads a recorded clip and returns base64-encoded raw 16-bit PCM, suitable
+ * for the Live API. A WAV container (iOS LINEARPCM) has its header stripped;
+ * anything else is returned untouched (the Live API will reject non-PCM).
+ */
+export async function getRecordingPcmBase64(uri: string): Promise<string> {
+  const base64 = await readAsStringAsync(uri, { encoding: EncodingType.Base64 });
+  const binary = atob(base64);
+
+  const isWav =
+    binary.length > 12 &&
+    binary.slice(0, 4) === 'RIFF' &&
+    binary.slice(8, 12) === 'WAVE';
+
+  if (isWav) {
+    const dataOffset = findWavDataOffset(binary);
+    if (dataOffset >= 0) {
+      return btoa(binary.slice(dataOffset));
+    }
+  }
+
+  console.warn(
+    `Recording is not WAV/PCM (${binary.length} bytes) — Live API requires raw PCM`
+  );
+  return base64;
+}
+
+/** Finds the byte offset of a WAV file's PCM data, scanning chunk headers. */
+function findWavDataOffset(binary: string): number {
+  let offset = 12; // skip 'RIFF' + size + 'WAVE'
+  while (offset + 8 <= binary.length) {
+    const chunkId = binary.slice(offset, offset + 4);
+    const chunkSize =
+      binary.charCodeAt(offset + 4) |
+      (binary.charCodeAt(offset + 5) << 8) |
+      (binary.charCodeAt(offset + 6) << 16) |
+      (binary.charCodeAt(offset + 7) << 24);
+    if (chunkId === 'data') {
+      return offset + 8;
+    }
+    offset += 8 + chunkSize + (chunkSize % 2); // chunks are word-aligned
+  }
+  return -1;
+}
+
+/**
+ * Plays a turn of Live API response audio. Chunks are raw 16-bit PCM (24kHz
+ * mono); they are concatenated, wrapped in a WAV header, and played as one
+ * clip. Resolves when playback finishes.
+ */
+export async function playPcmChunks(
+  chunksBase64: string[],
+  sampleRate = 24000
+): Promise<void> {
+  if (chunksBase64.length === 0) return;
+
+  const buffers: Uint8Array[] = [];
+  let totalLength = 0;
+  for (const chunk of chunksBase64) {
+    const bin = atob(chunk);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) {
+      bytes[i] = bin.charCodeAt(i);
+    }
+    buffers.push(bytes);
+    totalLength += bytes.length;
+  }
+
+  const pcm = new Uint8Array(totalLength);
+  let pos = 0;
+  for (const buffer of buffers) {
+    pcm.set(buffer, pos);
+    pos += buffer.length;
+  }
+
+  const wavBase64 = pcmBytesToWavBase64(pcm, sampleRate);
+  await playAudio(`data:audio/wav;base64,${wavBase64}`);
+}
+
+/** Wraps raw 16-bit mono PCM bytes in a WAV container and base64-encodes it. */
+function pcmBytesToWavBase64(pcm: Uint8Array, sampleRate: number): string {
+  const numChannels = 1;
+  const bitsPerSample = 16;
+  const byteRate = sampleRate * numChannels * (bitsPerSample / 8);
+  const blockAlign = numChannels * (bitsPerSample / 8);
+  const dataSize = pcm.length;
+
+  const buffer = new ArrayBuffer(44 + dataSize);
+  const view = new DataView(buffer);
+  const writeString = (offset: number, str: string) => {
+    for (let i = 0; i < str.length; i++) {
+      view.setUint8(offset + i, str.charCodeAt(i));
+    }
+  };
+
+  writeString(0, 'RIFF');
+  view.setUint32(4, 36 + dataSize, true);
+  writeString(8, 'WAVE');
+  writeString(12, 'fmt ');
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true); // PCM
+  view.setUint16(22, numChannels, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, byteRate, true);
+  view.setUint16(32, blockAlign, true);
+  view.setUint16(34, bitsPerSample, true);
+  writeString(36, 'data');
+  view.setUint32(40, dataSize, true);
+
+  const bytes = new Uint8Array(buffer);
+  bytes.set(pcm, 44);
+
+  const CHUNK = 8192;
+  let binaryStr = '';
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    binaryStr += String.fromCharCode.apply(
+      null,
+      Array.from(bytes.subarray(i, Math.min(i + CHUNK, bytes.length)))
+    );
+  }
+  return btoa(binaryStr);
 }

@@ -1,7 +1,9 @@
 # Live API Refactor Plan
 
-> Status: planned, not yet started.
-> Owner: you. Target branch: `feature/live-api`.
+> Status: **Phase 1 implemented** — code complete and type-checking clean.
+> Device testing (iOS + Android) and the Android PCM spike remain. See
+> "Implementation status" below.
+> Branch: `feature/google-tts-stt`.
 
 ## Why
 
@@ -17,6 +19,32 @@ Expected gains:
 - **Latency:** first audio out in ~600ms (Google's published target), ~5× faster perceived
 - **Cost:** ~4–6× cheaper per turn, dominated by no longer paying TTS audio output tokens on every turn AND not re-sending the system prompt on every turn
 - **Quality:** native-audio model preserves tone/mood/pacing — matches the "thoughtful friend" design goal in [conversation_design.md](conversation_design.md)
+
+## Implementation status
+
+Phase 1 is implemented in code. The remaining work is device verification,
+which cannot be done from a code environment.
+
+**Done:**
+- [x] `LiveSession` WebSocket client — [app/src/services/live.ts](../app/src/services/live.ts) (new file; kept out of the already-1450-line `ai.ts`)
+- [x] PCM recording config, WAV-header stripping, and 24kHz PCM playback — [app/src/services/audio.ts](../app/src/services/audio.ts)
+- [x] `buildSystemPrompt` exported with a `mode: 'live'` / `greeting` option — [app/src/services/ai.ts](../app/src/services/ai.ts)
+- [x] Voice loop rewired to drive `LiveSession`: per-conversation session, streaming transcripts, turn-complete persistence — [app/src/hooks/useSession.ts](../app/src/hooks/useSession.ts)
+- [x] `LiveSessionCallbacks` type — [app/src/types/index.ts](../app/src/types/index.ts)
+- [x] Feature flag `EXPO_PUBLIC_USE_LIVE_API` with fallback to the REST voice pipeline — both build-time and at runtime if the Live session fails to open
+- [x] Analysis models bumped `gemini-3-flash-preview` → `gemini-3.1-flash-preview` (ai, insights, patterns, theories, prompts)
+- [x] App type-checks (`npx tsc`) with no new errors
+
+**Pending (needs a device/simulator):**
+- [ ] **Android PCM spike** — `expo-audio` records raw PCM cleanly on iOS (LINEARPCM/WAV), but Android's `MediaRecorder` cannot emit raw PCM. The Android branch in `audio.ts` is best-effort: if it produces a non-WAV file, the Live path logs a clear error. Until a streaming recorder or native module is added, `EXPO_PUBLIC_USE_LIVE_API` may need to stay `false` on Android.
+- [ ] End-to-end voice test on iOS: greeting, turn-taking, transcript bubbles, audio playback
+- [ ] Latency + cost measurement against the targets in this doc
+- [ ] WebSocket drop / app-backgrounding behaviour
+
+**Deviations from the original plan:**
+- `LiveSession` lives in its own `live.ts`, not inside `ai.ts` — `ai.ts` was already ~1450 lines.
+- The session resumption handle is kept in memory (used for in-conversation reconnects only), not persisted to AsyncStorage — a conversation does not survive an app kill, so cross-restart persistence buys nothing.
+- `buildSystemPrompt` gained an options arg rather than a separate `buildVoiceSystemPrompt` function — less duplication, REST callers unaffected.
 
 ## Model split (decided)
 
@@ -50,10 +78,10 @@ When Google ships a `gemini-3.x-flash-native-audio-*`, swap the voice model — 
 │   → record PCM @ 16kHz mono   │
 │ User taps stop                │
 │   → send PCM blob + endTurn   │
-│   → input transcript arrives  │ ─── persist to SQLite as user Message
-│   → audio chunks arrive       │ ─── play as they arrive
-│   → output transcript arrives │ ─── persist as assistant Message
-│   → turncomplete              │
+│   → input transcript arrives  │ ─── stream into user Message bubble
+│   → audio chunks arrive       │ ─── buffer (Phase 1)
+│   → output transcript arrives │ ─── stream into assistant Message bubble
+│   → turncomplete              │ ─── persist both messages, play buffered audio
 └───────────────────────────────┘
         │   (repeat per turn, same session)
         ▼
@@ -82,7 +110,7 @@ Keep the current tap-to-record-tap-to-stop UX. After stop, send the full recorde
 - Eliminates separate STT call (Live API does it as part of the turn)
 - Eliminates separate TTS call (audio out is part of the turn)
 - System prompt sent once per session, not per turn
-- Audio response **plays as chunks arrive**, not after full synthesis — biggest perceived-latency win
+- Audio response is buffered per turn then played (streaming chunk-by-chunk playback is a Phase 2 polish)
 - WebSocket warm-up cost paid once at conversation start
 
 **What Phase 1 does NOT give us:**
@@ -100,15 +128,19 @@ Ship Phase 1 first. Decide Phase 2 from real usage data.
 
 ## File-by-file changes (Phase 1)
 
+### `app/src/services/live.ts` (new)
+`LiveSession` class wrapping the raw WebSocket protocol. Public surface:
+- `connect(systemPrompt, callbacks: LiveSessionCallbacks)` — opens the socket, sends setup, resolves on `setupComplete`
+- `sendAudioTurn(pcmBase64)` — sends the PCM clip + `audioStreamEnd`
+- `sendTextTurn(text)` — used to trigger the greeting
+- `close()`, `isConnected`
+- Internally: setup message, in-memory resumption handle, sliding-window compression, 3-attempt reconnect
+
 ### `app/src/services/ai.ts`
-- **Add:** `LiveSession` class wrapping the raw WebSocket protocol (see SDK choice below). Public surface:
-  - `connect(systemPrompt: string, opts: { onInputTranscript, onOutputTranscript, onAudioChunk, onTurnComplete, onError, onClose })`
-  - `sendAudioTurn(pcmBase64: string)` — sends audio + automatic `audioStreamEnd`
-  - `sendTextTurn(text: string)` — used for the greeting
-  - `close()`
-  - Internally: handles setup message, session resumption handle persistence, sliding-window compression config
-- **Keep unchanged:** `synthesizeMemory`, `updatePersonalKnowledge`, `generateMemoryVectors`, `findRelevantMemories`, `findRelevantMemoryVectors`, `generateEmbedding`, `buildSystemPrompt`, all the helpers below it. Just bump their model env var default to `gemini-3.1-flash-preview`.
-- **Deprecate (don't delete in Phase 1 — feature-flag fallback):** `transcribeAudio`, `synthesizeSpeech`, the voice path of `generateResponse`. Delete after dogfooding period.
+- **Changed:** `buildSystemPrompt` is now exported and takes a `SystemPromptOptions` arg (`mode: 'rest' | 'live'`, `greeting`). REST callers are unaffected (mode defaults to `rest`).
+- **Changed:** `DEFAULT_MODELS.gemini` bumped to `gemini-3.1-flash-preview`.
+- **Keep unchanged:** `synthesizeMemory`, `updatePersonalKnowledge`, `generateMemoryVectors`, `findRelevantMemories`, `findRelevantMemoryVectors`, `generateEmbedding`.
+- **Deprecated but retained (feature-flag fallback):** `transcribeAudio`, `synthesizeSpeech`, the voice path of `generateResponse`. Delete after the dogfooding period.
 
 ### `app/src/services/audio.ts`
 - **Change recording config:** record raw PCM 16-bit mono @ 16kHz instead of AAC `.m4a`. Use custom `RecordingOptions`:
@@ -161,16 +193,16 @@ Today's `ConversationState`: `idle | listening | transcribing | processing | res
 
 UI components do **not** change. `ConversationStatus` and `WaveformVisualizer` keep reading `conversationState`.
 
-## SDK choice: raw WebSocket
+## SDK choice: raw WebSocket (implemented)
 
-The new unified `@google/genai` SDK has a `live.connect()` helper, but our app currently uses raw `fetch` (no Gemini SDK calls anywhere — `@google/generative-ai@0.24.1` is in package.json but unused). For React Native compatibility risk reasons:
+The new unified `@google/genai` SDK has a `live.connect()` helper, but our app uses raw `fetch` (no Gemini SDK calls anywhere — `@google/generative-ai@0.24.1` is in package.json but unused). `live.ts` uses the raw WebSocket endpoint to avoid a new dependency and any RN compatibility risk:
 
-- Use the raw WebSocket endpoint: `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${apiKey}`
-- React Native has built-in `WebSocket`. No new dependency.
-- Protocol is just JSON-over-WebSocket. The setup message, audio frames, and server messages are well-documented.
-- Crib from [`/google-gemini/live-api-web-console`](https://github.com/google-gemini/live-api-web-console) for the message shapes.
+- Endpoint: `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${apiKey}`
+- React Native provides a global `WebSocket`. No new dependency.
+- Protocol is JSON-over-WebSocket: client sends `setup`, then `realtimeInput` (audio) / `clientContent` (text); server replies with `setupComplete`, `serverContent` (`modelTurn` audio, `inputTranscription`, `outputTranscription`, `turnComplete`), and `sessionResumptionUpdate`.
+- One caveat the device test must confirm: the WebSocket message-frame shapes (`setup` wrapper key, `realtimeInput.audio`) were written against Google's docs, not verified on a running device. If setup is rejected, that's the first place to look.
 
-Revisit if `@google/genai` proves to import cleanly in RN/Expo and offers meaningful ergonomics.
+Revisit `@google/genai` only if the raw protocol proves fragile.
 
 ## Memory injection (unchanged data, different delivery)
 
@@ -186,8 +218,8 @@ These all run once at `startSession` instead of once per turn — which is itsel
 ## Session resilience
 
 - **`contextWindowCompression: { slidingWindow: {} }`** — 128k window is large but a long journaling session with extensive memory context could still trip it. Sliding window keeps the session alive by evicting oldest turns.
-- **`sessionResumption`** — persist the `newHandle` from each `SessionResumptionUpdate` to AsyncStorage; on WebSocket drop, reconnect with the handle to resume without re-sending system prompt.
-- **WebSocket drop handling** — auto-reconnect with the saved handle. Show a brief "reconnecting…" state if it takes >1s. After 3 failed retries, surface error and fall back to the old REST path (feature flag).
+- **`sessionResumption`** — the `newHandle` from each `SessionResumptionUpdate` is held in memory; on an unexpected WebSocket drop, `LiveSession` reconnects with that handle to resume without re-sending the system prompt. Not persisted to disk — a conversation does not outlive the app process, so the handle only needs to survive a mid-conversation drop.
+- **WebSocket drop handling** — `LiveSession` auto-reconnects up to 3 times with the resumption handle. After that it surfaces an error via `onError`. (A visible "reconnecting…" UI state is a polish item, not yet wired.)
 
 ## Cost & latency targets
 
@@ -226,11 +258,17 @@ Add a debug log of token usage from `usageMetadata` in server messages — verif
 
 ## Effort estimate (Phase 1)
 
-- **Audio format spike (Android PCM):** 1 hour. If blocked, +1 day for a streaming-recorder swap or native module.
-- **`LiveSession` class + WebSocket protocol:** 1 day. Most of this is wrangling the message shapes and event ordering.
-- **`useSession` rewrite + state machine wiring:** 1 day.
-- **`audio.ts` playback queue + WAV wrapping:** 0.5 day.
-- **Feature flag, fallback path, error handling, reconnection:** 0.5 day.
-- **Testing on iOS + Android, latency/cost verification:** 1 day.
+| Task | Estimate | Status |
+|---|---|---|
+| `LiveSession` class + WebSocket protocol | 1 day | done |
+| `useSession` rewrite + state machine wiring | 1 day | done |
+| `audio.ts` PCM recording + playback + WAV wrapping | 0.5 day | done |
+| Feature flag, fallback path, error handling, reconnection | 0.5 day | done |
+| Audio format spike (Android PCM) | 1 hour, +1 day if blocked | **pending — needs a device** |
+| Testing on iOS + Android, latency/cost verification | 1 day | **pending — needs a device** |
 
-**Total: ~4–5 days** assuming the Android PCM spike doesn't blow up. Original "half a weekend" was optimistic — the prior plan understated WebSocket protocol and reconnection work.
+The code for Phase 1 is written and type-checks. What's left is device-bound:
+the Android PCM spike and end-to-end verification. Until the iOS path is
+confirmed on a real build, treat the implementation as unverified — the
+WebSocket protocol and `expo-audio` PCM config were written against
+documentation, not a running device.

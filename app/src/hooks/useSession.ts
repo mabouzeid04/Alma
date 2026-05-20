@@ -1,15 +1,21 @@
 import { useState, useCallback, useRef } from 'react';
 import { Alert } from 'react-native';
 import { v4 as uuid } from 'uuid';
-import { JournalSession, Message, ConversationState, MemoryNode, MemoryVector, Prompt, ConversationContext } from '../types';
+import { JournalSession, Message, ConversationState, MemoryNode, MemoryVector, Prompt, ConversationContext, LiveSessionCallbacks } from '../types';
 import * as database from '../services/database';
 import * as audio from '../services/audio';
 import * as ai from '../services/ai';
+import { LiveSession } from '../services/live';
 import { detectAndUpdatePatterns } from '../services/patterns';
 import { evaluateTheories } from '../services/theories';
 import { markPromptExplored, buildPromptSessionOpener } from '../services/prompts';
 import { buildConversationContext } from '../services/personalization';
 import { haptics } from '../services/haptics';
+
+// When true, voice conversations run over one Live API WebSocket session
+// instead of the 3-call STT -> LLM -> TTS REST pipeline. See
+// docs/live-api-refactor.md.
+const USE_LIVE_API = process.env.EXPO_PUBLIC_USE_LIVE_API === 'true';
 
 // Standalone function to process session memory (can be called from processing screen)
 export async function processSessionMemory(session: JournalSession): Promise<void> {
@@ -55,6 +61,130 @@ export function useSession() {
   // Cache for memory retrieval (avoid re-fetching on every message)
   const allMemoriesRef = useRef<MemoryNode[]>([]);
   const allMemoryVectorsRef = useRef<MemoryVector[]>([]);
+
+  // Live API session state (only used when USE_LIVE_API)
+  const liveSessionRef = useRef<LiveSession | null>(null);
+  const audioChunksRef = useRef<string[]>([]);
+  const inputTranscriptRef = useRef('');
+  const outputTranscriptRef = useRef('');
+  const currentUserMsgIdRef = useRef<string | null>(null);
+  const currentAiMsgIdRef = useRef<string | null>(null);
+  const turnKindRef = useRef<'greeting' | 'normal'>('normal');
+  const greetingResolveRef = useRef<(() => void) | null>(null);
+
+  // Builds the Live API callbacks for a session. Transcripts stream in
+  // incrementally and are accumulated per turn; messages are written to the
+  // database once a turn completes (with their final text).
+  const buildLiveCallbacks = useCallback((sessionId: string): LiveSessionCallbacks => ({
+    onReady: () => {
+      console.log('Live session ready');
+    },
+
+    onInputTranscript: (chunk: string) => {
+      inputTranscriptRef.current += chunk;
+      const text = inputTranscriptRef.current;
+      setConversationState('processing');
+      setMessages((prev) => {
+        const id = currentUserMsgIdRef.current;
+        if (id) {
+          return prev.map((m) => (m.id === id ? { ...m, content: text } : m));
+        }
+        const newId = uuid();
+        currentUserMsgIdRef.current = newId;
+        return [...prev, { id: newId, content: text, isUser: true, timestamp: new Date() }];
+      });
+    },
+
+    onOutputTranscript: (chunk: string) => {
+      // The greeting bubble keeps its known text; only later turns stream.
+      if (turnKindRef.current === 'greeting') return;
+      outputTranscriptRef.current += chunk;
+      const text = outputTranscriptRef.current;
+      setMessages((prev) => {
+        const id = currentAiMsgIdRef.current;
+        if (id) {
+          return prev.map((m) => (m.id === id ? { ...m, content: text } : m));
+        }
+        const newId = uuid();
+        currentAiMsgIdRef.current = newId;
+        return [...prev, { id: newId, content: text, isUser: false, timestamp: new Date() }];
+      });
+    },
+
+    onAudioChunk: (base64Pcm: string) => {
+      audioChunksRef.current.push(base64Pcm);
+    },
+
+    onTurnComplete: async () => {
+      const kind = turnKindRef.current;
+      const chunks = audioChunksRef.current;
+      audioChunksRef.current = [];
+
+      // Persist the completed turn's messages with their final transcripts.
+      if (kind === 'normal') {
+        const userText = inputTranscriptRef.current.trim();
+        const aiText = outputTranscriptRef.current.trim();
+        if (userText && currentUserMsgIdRef.current) {
+          await database.addMessage(sessionId, {
+            id: currentUserMsgIdRef.current,
+            content: userText,
+            isUser: true,
+            timestamp: new Date(),
+          });
+        }
+        if (aiText && currentAiMsgIdRef.current) {
+          await database.addMessage(sessionId, {
+            id: currentAiMsgIdRef.current,
+            content: aiText,
+            isUser: false,
+            timestamp: new Date(),
+          });
+        }
+      }
+
+      if (chunks.length > 0) {
+        setConversationState('responding');
+        haptics.aiResponse();
+        try {
+          await audio.playPcmChunks(chunks);
+        } catch (error) {
+          console.warn('Failed to play Live response audio:', error);
+        }
+      }
+
+      inputTranscriptRef.current = '';
+      outputTranscriptRef.current = '';
+      currentUserMsgIdRef.current = null;
+      currentAiMsgIdRef.current = null;
+      setConversationState('idle');
+
+      if (kind === 'greeting') {
+        turnKindRef.current = 'normal';
+        const resolve = greetingResolveRef.current;
+        greetingResolveRef.current = null;
+        resolve?.();
+      }
+    },
+
+    onInterrupted: () => {
+      audioChunksRef.current = [];
+    },
+
+    onError: (error: Error) => {
+      console.error('Live session error:', error);
+      // Don't strand startSession if the greeting turn fails.
+      const resolve = greetingResolveRef.current;
+      if (resolve) {
+        greetingResolveRef.current = null;
+        resolve();
+      }
+      setConversationState('idle');
+    },
+
+    onClose: (reason: string) => {
+      console.log('Live session closed:', reason);
+    },
+  }), []);
 
   // Start a new session (optionally from a prompt)
   const startSession = useCallback(async (promptId?: string) => {
@@ -108,36 +238,91 @@ export function useSession() {
     // Get opening message - use prompt opener if from prompt, otherwise default greeting
     const greeting = prompt ? buildPromptSessionOpener(prompt) : ai.getGreeting();
 
-    // Generate speech for greeting (don't await to avoid blocking)
-    const greetingAudioPromise = ai.synthesizeSpeech(greeting);
-
+    // Greeting bubble shows immediately; spoken audio follows.
     const aiMessage: Message = {
       id: uuid(),
       content: greeting,
       isUser: false,
       timestamp: new Date(),
     };
-
     setMessages([aiMessage]);
     await database.addMessage(session.id, aiMessage);
-
     haptics.success();
 
-    // Play greeting audio and wait for it to finish before returning
-    // This ensures recording doesn't start until greeting is done
-    try {
-      const audioUri = await greetingAudioPromise;
-      if (audioUri) {
-        console.log('Playing greeting audio...');
-        await audio.playAudio(audioUri);
-        console.log('Greeting audio finished, ready for recording');
+    // --- Live API path: open one streaming session for the conversation ---
+    let liveActive = false;
+    if (USE_LIVE_API) {
+      try {
+        // Build the full memory context once; the Live session reuses it as
+        // a system instruction for every turn (no per-turn re-send).
+        const personalKnowledge = await database.getPersonalKnowledge();
+        const relevantMemories = await ai.findRelevantMemories(
+          greeting,
+          allMemoriesRef.current,
+          20
+        );
+        const relevantMemoryVectors = await ai.findRelevantMemoryVectors(
+          greeting,
+          allMemoryVectorsRef.current,
+          30
+        );
+        let conversationContext: ConversationContext | undefined;
+        try {
+          conversationContext = await buildConversationContext(greeting, allMemoriesRef.current);
+        } catch (error) {
+          console.warn('Failed to build conversation context:', error);
+        }
+        const systemPrompt = ai.buildSystemPrompt(
+          personalKnowledge,
+          relevantMemories,
+          relevantMemoryVectors,
+          conversationContext,
+          { mode: 'live', greeting }
+        );
+
+        const liveSession = new LiveSession();
+        liveSessionRef.current = liveSession;
+        await liveSession.connect(systemPrompt, buildLiveCallbacks(session.id));
+        liveActive = true;
+
+        // Trigger the model's spoken greeting and wait for it to finish so
+        // recording doesn't start until the greeting is done.
+        turnKindRef.current = 'greeting';
+        setConversationState('responding');
+        await new Promise<void>((resolve) => {
+          greetingResolveRef.current = resolve;
+          liveSession.sendTextTurn('[The session has started. Greet the user now.]');
+          setTimeout(() => {
+            if (greetingResolveRef.current) {
+              greetingResolveRef.current = null;
+              resolve();
+            }
+          }, 20000);
+        });
+        setConversationState('idle');
+      } catch (error) {
+        console.warn('Live API session failed, falling back to REST voice:', error);
+        liveSessionRef.current = null;
+        liveActive = false;
       }
-    } catch (error) {
-      console.warn('Failed to play greeting audio:', error);
+    }
+
+    // --- REST fallback path (also used when USE_LIVE_API is false) ---
+    if (!liveActive) {
+      try {
+        const audioUri = await ai.synthesizeSpeech(greeting);
+        if (audioUri) {
+          console.log('Playing greeting audio...');
+          await audio.playAudio(audioUri);
+          console.log('Greeting audio finished, ready for recording');
+        }
+      } catch (error) {
+        console.warn('Failed to play greeting audio:', error);
+      }
     }
 
     return session;
-  }, []);
+  }, [buildLiveCallbacks]);
 
   // Start recording
   const startRecording = useCallback(async () => {
@@ -162,6 +347,36 @@ export function useSession() {
     setIsRecording(false);
     haptics.recordingStopped();
 
+    if (!result) {
+      setConversationState('idle');
+      return;
+    }
+
+    // --- Live API path: send the recorded PCM as one turn ---
+    if (USE_LIVE_API && liveSessionRef.current?.isConnected) {
+      setConversationState('transcribing');
+      inputTranscriptRef.current = '';
+      outputTranscriptRef.current = '';
+      currentUserMsgIdRef.current = null;
+      currentAiMsgIdRef.current = null;
+      audioChunksRef.current = [];
+      turnKindRef.current = 'normal';
+      try {
+        const pcm = await audio.getRecordingPcmBase64(result.uri);
+        liveSessionRef.current.sendAudioTurn(pcm);
+      } catch (error) {
+        console.error('Failed to send Live audio turn:', error);
+        Alert.alert(
+          'Something went wrong',
+          'There was a problem sending your message. Please try again.',
+          [{ text: 'OK' }]
+        );
+        setConversationState('idle');
+      }
+      return;
+    }
+
+    // --- REST fallback path ---
     if (result) {
       try {
         // Show transcribing state while processing audio
@@ -290,6 +505,12 @@ export function useSession() {
 
     setIsEnding(true);
 
+    // Close the Live API session (if any) before persisting.
+    if (liveSessionRef.current) {
+      liveSessionRef.current.close();
+      liveSessionRef.current = null;
+    }
+
     const endedAt = new Date();
     const duration = sessionStartTime.current
       ? (endedAt.getTime() - sessionStartTime.current.getTime()) / 1000
@@ -336,6 +557,13 @@ export function useSession() {
     sessionStartTime.current = null;
     allMemoriesRef.current = [];
     allMemoryVectorsRef.current = [];
+    audioChunksRef.current = [];
+    inputTranscriptRef.current = '';
+    outputTranscriptRef.current = '';
+    currentUserMsgIdRef.current = null;
+    currentAiMsgIdRef.current = null;
+    greetingResolveRef.current = null;
+    turnKindRef.current = 'normal';
 
     return sessionId;
   }, [currentSession, messages, isEnding]);

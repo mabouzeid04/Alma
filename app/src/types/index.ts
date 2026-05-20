@@ -57,6 +57,21 @@ export interface AppState {
   isRecording: boolean;
 }
 
+// Live API types
+
+// Callbacks the conversation layer registers on a LiveSession. Transcripts
+// arrive incrementally, so callers should accumulate text per turn.
+export interface LiveSessionCallbacks {
+  onReady?: () => void;
+  onInputTranscript?: (textChunk: string) => void;
+  onOutputTranscript?: (textChunk: string) => void;
+  onAudioChunk?: (base64Pcm: string) => void;
+  onTurnComplete?: () => void;
+  onInterrupted?: () => void;
+  onError?: (error: Error) => void;
+  onClose?: (reason: string) => void;
+}
+
 // Insights types
 
 export type InsightType = 'trend' | 'pattern' | 'growth' | 'suggestion' | 'reflection' | 'connection' | 'blind_spot';

@@ -16,7 +16,7 @@ import { fetchWithRetry, createTimeoutController } from './api-utils';
 const GEMINI_API_KEY = process.env.EXPO_PUBLIC_GEMINI_API_KEY || '';
 const GEMINI_API_URL = 'https://generativelanguage.googleapis.com/v1beta';
 
-const PROMPT_MODEL = process.env.EXPO_PUBLIC_PROMPT_MODEL || 'gemini-3-flash-preview';
+const PROMPT_MODEL = process.env.EXPO_PUBLIC_PROMPT_MODEL || 'gemini-3.1-flash-preview';
 const SYNTHESIS_THINKING_LEVEL = 'medium';
 
 // Constants
