@@ -107,6 +107,9 @@ interface FactCardProps {
 }
 
 function FactCard({ fact, onDelete }: FactCardProps) {
+  const [isExpanded, setIsExpanded] = useState(false);
+  const [isTruncated, setIsTruncated] = useState(false);
+
   const handleDelete = () => {
     haptics.light();
     Alert.alert(
@@ -126,11 +129,33 @@ function FactCard({ fact, onDelete }: FactCardProps) {
     );
   };
 
+  const toggleExpanded = () => {
+    if (!isTruncated && !isExpanded) return;
+    haptics.light();
+    setIsExpanded(prev => !prev);
+  };
+
   return (
-    <View style={factStyles.card}>
+    <Pressable
+      onPress={toggleExpanded}
+      style={({ pressed }) => [
+        factStyles.card,
+        pressed && (isTruncated || isExpanded) && factStyles.cardPressed,
+      ]}
+    >
       <View style={factStyles.contentRow}>
         <View style={factStyles.textContainer}>
-          <Text style={factStyles.content}>{fact.content}</Text>
+          <Text
+            style={factStyles.content}
+            numberOfLines={isExpanded ? undefined : 2}
+            onTextLayout={(e) => {
+              if (!isExpanded && e.nativeEvent.lines.length >= 2 && !isTruncated) {
+                setIsTruncated(true);
+              }
+            }}
+          >
+            {fact.content}
+          </Text>
           {fact.date && (
             <Text style={factStyles.date}>{fact.date}</Text>
           )}
@@ -146,7 +171,7 @@ function FactCard({ fact, onDelete }: FactCardProps) {
           <Ionicons name="close-circle" size={20} color={colors.textTertiary} />
         </Pressable>
       </View>
-    </View>
+    </Pressable>
   );
 }
 
@@ -158,6 +183,9 @@ const factStyles = StyleSheet.create({
     marginBottom: spacing.xs,
     borderWidth: 1,
     borderColor: colors.border,
+  },
+  cardPressed: {
+    opacity: 0.7,
   },
   contentRow: {
     flexDirection: 'row',
@@ -371,7 +399,7 @@ export default function PersonalKnowledgeScreen() {
         >
           <Text style={styles.description}>
             Facts Alma has learned about you.{'\n'}
-            Tap a fact to delete it.
+            Tap a fact to expand it, or × to delete.
           </Text>
         </Animated.View>
 

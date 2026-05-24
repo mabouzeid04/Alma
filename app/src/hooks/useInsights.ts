@@ -35,8 +35,13 @@ export function useInsights() {
         setReport(insightsReport);
         setState('ready');
       } else {
-        setState('insufficient_data');
+        // canGenerate was true above, so a null here means generation failed —
+        // not a data shortfall. Surface that distinctly so the user sees an
+        // error they can retry instead of the misleading "X more to unlock"
+        // lock screen.
+        setError("Couldn't generate insights right now. Please try again.");
         setReport(null);
+        setState('error');
       }
     } catch (err) {
       console.error('Error loading insights:', err);

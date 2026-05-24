@@ -22,6 +22,7 @@ import {
 } from '../src/components';
 import { useSession } from '../src/hooks';
 import { haptics } from '../src/services/haptics';
+import * as audio from '../src/services/audio';
 
 type WaveformState = 'idle' | 'speaking' | 'transcribing' | 'processing' | 'aiSpeaking';
 
@@ -40,6 +41,7 @@ export default function ConversationScreen() {
     startSession,
     startRecording,
     stopRecording,
+    interruptAndRecord,
     prepareEndSession,
   } = useSession();
 
@@ -56,7 +58,15 @@ export default function ConversationScreen() {
   useEffect(() => {
     const initSession = async () => {
       await startSession(promptId);
-      // Greeting audio has finished, now start recording
+      // Defensive: with the playAudio fix, isPlaying() should already be false
+      // here. If it isn't, give the player a brief window to finish before we
+      // open the mic — and log it so the regression is visible.
+      if (audio.isPlaying()) {
+        console.warn('[conversation] greeting still playing after startSession returned');
+        for (let i = 0; i < 5 && audio.isPlaying(); i++) {
+          await new Promise((r) => setTimeout(r, 100));
+        }
+      }
       const started = await startRecording();
       console.log('Recording started:', started);
     };
@@ -236,6 +246,9 @@ export default function ConversationScreen() {
               if (isRecording) {
                 console.log('Stopping recording to send...');
                 stopRecording();
+              } else if (conversationState === 'responding') {
+                console.log('Interrupting AI to speak...');
+                interruptAndRecord();
               } else if (conversationState === 'idle') {
                 console.log('Starting recording...');
                 startRecording();
@@ -250,7 +263,7 @@ export default function ConversationScreen() {
               audioLevel={audioLevel}
             />
             <Text style={styles.waveformHint}>
-              {isRecording ? 'Tap to send' : conversationState === 'transcribing' ? 'Transcribing...' : conversationState === 'idle' ? 'Tap to speak' : ''}
+              {isRecording ? 'Tap to send' : conversationState === 'transcribing' ? 'Transcribing...' : conversationState === 'responding' ? 'Tap to speak' : conversationState === 'idle' ? 'Tap to speak' : ''}
             </Text>
           </Pressable>
         </Animated.View>

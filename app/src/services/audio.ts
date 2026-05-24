@@ -3,9 +3,11 @@ import {
   createAudioPlayer,
   requestRecordingPermissionsAsync,
   setAudioModeAsync,
+  setIsAudioActiveAsync,
   RecordingPresets,
   type AudioPlayer,
   type AudioRecorder,
+  type AudioStatus,
   type RecordingOptions
 } from 'expo-audio';
 import { Platform } from 'react-native';
@@ -17,6 +19,14 @@ let player: AudioPlayer | null = null;
 let tempFileCounter = 0;
 let meteringInterval: ReturnType<typeof setInterval> | null = null;
 let meteringCallback: ((level: number) => void) | null = null;
+
+// True only between actual play-start and play-end, so callers can ask whether
+// audio is *audibly* playing — not just whether a player object happens to exist.
+let isCurrentlyPlaying = false;
+// Monotonic id incremented on every new playback / teardown. Listeners from a
+// torn-down player carry their own captured id and bail out if it's stale, so
+// they can't resolve a newer playback promise.
+let currentPlaybackId = 0;
 
 export interface AudioRecordingResult {
   uri: string;
@@ -212,17 +222,33 @@ export async function getRecordingStatus(): Promise<any> {
 
 export async function playAudio(uri: string): Promise<void> {
   try {
-    // Stop any currently playing audio
+    // Tear down any previous player and invalidate its listener.
     if (player) {
+      try {
+        player.pause();
+      } catch {
+        // ignore — player may already be in a terminal state
+      }
       player.release();
       player = null;
     }
+    isCurrentlyPlaying = false;
+    const myPlaybackId = ++currentPlaybackId;
 
-    // Setup audio mode for playback
+    // Force the iOS playback session into PLAYBACK + active BEFORE play(). The
+    // previous version set the mode but didn't activate, so the very first
+    // greeting could queue audio against an inactive session and only drain
+    // once startRecording flipped categories — which is exactly when the mic
+    // was already open. setIsAudioActiveAsync ensures the session is hot.
     await setAudioModeAsync({
       allowsRecording: false,
       playsInSilentMode: true,
     });
+    try {
+      await setIsAudioActiveAsync(true);
+    } catch (error) {
+      console.warn('[audio] setIsAudioActiveAsync failed:', error);
+    }
 
     let audioUri = uri;
 
@@ -250,35 +276,64 @@ export async function playAudio(uri: string): Promise<void> {
     }
 
     console.log('Creating player from:', audioUri.substring(0, 50));
-    player = createAudioPlayer({ uri: audioUri });
-    
-    // Wait for playback to complete
-    return new Promise((resolve) => {
-      player!.play();
-      
-      // Poll playback status by checking the playing property
-      const statusInterval = setInterval(() => {
-        if (!player) {
-          clearInterval(statusInterval);
-          resolve();
-          return;
+    // 100ms status updates so we see didJustFinish promptly (default is 500ms).
+    player = createAudioPlayer({ uri: audioUri }, { updateInterval: 100 });
+
+    return new Promise<void>((resolve) => {
+      let resolved = false;
+      let hasStartedPlaying = false;
+      let subscription: { remove: () => void } | null = null;
+      let hardTimeout: ReturnType<typeof setTimeout> | null = null;
+      let startupTimeout: ReturnType<typeof setTimeout> | null = null;
+
+      const finish = (reason: string) => {
+        if (resolved) return;
+        resolved = true;
+        if (hardTimeout) clearTimeout(hardTimeout);
+        if (startupTimeout) clearTimeout(startupTimeout);
+        try {
+          subscription?.remove();
+        } catch {
+          // ignore — listener may already be detached
         }
-        
-        // Check if player has finished (no longer playing and has duration)
-        if (!player.playing && player.currentTime > 0) {
-          console.log('Audio playback finished');
-          clearInterval(statusInterval);
-          resolve();
+        // Only release if no newer playback has taken over this slot.
+        if (currentPlaybackId === myPlaybackId && player) {
+          try {
+            player.pause();
+          } catch {
+            // ignore
+          }
+          player.release();
+          player = null;
+          isCurrentlyPlaying = false;
         }
-      }, 100);
-      
-      // Set timeout to avoid infinite waiting
-      setTimeout(() => {
-        if (statusInterval) {
-          clearInterval(statusInterval);
-        }
+        console.log(`Audio playback finished (${reason})`);
         resolve();
-      }, 60000); // 60 second max
+      };
+
+      subscription = player!.addListener('playbackStatusUpdate', (status: AudioStatus) => {
+        if (currentPlaybackId !== myPlaybackId) return; // stale event
+        if (status.playing && status.currentTime > 0) {
+          hasStartedPlaying = true;
+          isCurrentlyPlaying = true;
+        }
+        if (status.didJustFinish) {
+          finish('didJustFinish');
+        }
+      });
+
+      // Safety net so the promise can never hang forever.
+      hardTimeout = setTimeout(() => finish('hard-timeout'), 60_000);
+
+      // If we never observe playing=true within 2s, surface it loudly. This is
+      // the exact regression signature of the original bug.
+      startupTimeout = setTimeout(() => {
+        if (!hasStartedPlaying) {
+          console.warn('[audio] play() called but no playing=true status received within 2s');
+        }
+      }, 2_000);
+
+      player!.play();
     });
   } catch (error) {
     console.error('Failed to play audio:', error);
@@ -287,13 +342,28 @@ export async function playAudio(uri: string): Promise<void> {
 
 export async function stopPlayback(): Promise<void> {
   if (player) {
+    // pause() before release() so the audio buffer is silenced immediately
+    // rather than risking a final fragment after the SharedObject is torn down.
+    try {
+      player.pause();
+    } catch {
+      // ignore — player may already be in a terminal state
+    }
     player.release();
     player = null;
   }
+  isCurrentlyPlaying = false;
+  // Invalidate any in-flight playbackStatusUpdate listener so it can't resolve
+  // a promise that was meant for the player we just released.
+  currentPlaybackId++;
 }
 
 export function isRecording(): boolean {
   return recorder !== null;
+}
+
+export function isPlaying(): boolean {
+  return isCurrentlyPlaying;
 }
 
 // =============================================================================

@@ -296,7 +296,8 @@ async function callInsightsAI(data: AnalysisData): Promise<string | null> {
 }
 
 async function callGemini(prompt: string, model: string): Promise<string | null> {
-  const { controller, timeoutId } = createTimeoutController(10000); // 60s timeout for insights
+  // 60s timeout: medium thinking on a multi-session prompt routinely takes >10s.
+  const { controller, timeoutId } = createTimeoutController(60000);
 
   try {
     const response = await fetchWithRetry(
@@ -313,7 +314,10 @@ async function callGemini(prompt: string, model: string): Promise<string | null>
           ],
           generationConfig: {
             temperature: 0.7,
-            maxOutputTokens: 2000,
+            // Gemini 3 counts thinking tokens against maxOutputTokens. Medium
+            // thinking on this prompt can easily eat 2000 tokens before any
+            // text is emitted, so leave headroom for reasoning + the JSON report.
+            maxOutputTokens: 16000,
             topP: 0.9,
             thinkingConfig: {
               thinkingLevel: SYNTHESIS_THINKING_LEVEL,
@@ -330,14 +334,38 @@ async function callGemini(prompt: string, model: string): Promise<string | null>
     }
 
     const result = await response.json();
-    return result.candidates?.[0]?.content?.parts?.[0]?.text || null;
+    return extractGeminiText(result);
   } finally {
     clearTimeout(timeoutId);
   }
 }
 
+// Extract text from a Gemini generateContent response. With thinking enabled,
+// `content.parts` may contain multiple parts and the first one can hold only
+// a thoughtSignature with no .text — concatenate every part that has text.
+// Throws with finishReason context if no text was produced (e.g. MAX_TOKENS,
+// SAFETY) so the failure is visible instead of being collapsed to null.
+function extractGeminiText(result: any): string {
+  const candidate = result?.candidates?.[0];
+  if (!candidate) {
+    throw new Error('Gemini returned no candidates');
+  }
+
+  const parts: any[] = candidate?.content?.parts || [];
+  const text = parts
+    .map((p) => (typeof p?.text === 'string' ? p.text : ''))
+    .join('');
+
+  if (!text) {
+    const finishReason = candidate.finishReason || 'unknown';
+    throw new Error(`Gemini returned no text (finishReason=${finishReason})`);
+  }
+
+  return text;
+}
+
 async function callOpenAI(prompt: string, model: string): Promise<string | null> {
-  const { controller, timeoutId } = createTimeoutController(10000); // 60s timeout for insights
+  const { controller, timeoutId } = createTimeoutController(60000);
 
   try {
     const response = await fetchWithRetry(`${OPENAI_API_URL}/chat/completions`, {

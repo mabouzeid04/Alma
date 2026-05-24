@@ -191,7 +191,8 @@ function buildPatternDetectionPrompt(
   session: JournalSession,
   memoryNode: MemoryNode,
   recentSessions: { session: JournalSession; memory: MemoryNode | null }[],
-  existingPatterns: Pattern[]
+  existingPatterns: Pattern[],
+  personalKnowledge: string
 ): string {
   // Format current session
   const currentSessionText = `
@@ -237,7 +238,10 @@ Evidence Quotes: ${p.evidenceQuotes.slice(0, 3).join(' | ') || 'None'}
         `.trim())
         .join('\n\n');
 
-  return `You are analyzing journal sessions to identify patterns the user wouldn't notice themselves.
+  return `You are analyzing journal sessions to identify patterns Mahmoud wouldn't notice himself.
+
+ABOUT MAHMOUD (personal context):
+${personalKnowledge || '(No personal knowledge captured yet)'}
 
 CURRENT SESSION (just completed):
 ${currentSessionText}
@@ -250,18 +254,22 @@ ${existingPatternsText}
 
 ---
 
+NAMING: Always refer to the journaler as "Mahmoud" in pattern descriptions. Never use "the user", "the journaler", or generic third-person references.
+
+---
+
 YOUR TASK:
 
-Analyze the current session in context of the user's history. Look for:
+Analyze the current session in context of Mahmoud's history. Look for:
 
 1. EMOTIONAL TRENDS
    - Shifts in baseline mood or energy
    - Recurring emotional states in specific contexts
-   - Deviations from their usual patterns
+   - Deviations from his usual patterns
 
 2. OPINION EVOLUTION
    - How feelings about topics/people/situations have changed
-   - Shifts that the user might not be aware of
+   - Shifts that Mahmoud might not be aware of
    - Include specific quotes or evidence
 
 3. RELATIONSHIP DYNAMICS
@@ -405,6 +413,7 @@ export async function detectAndUpdatePatterns(
 
     const recentSessions = await db.getSessionsInDateRange(threeMonthsAgo, new Date());
     const existingPatterns = await db.getAllPatterns();
+    const personalKnowledge = await db.getPersonalKnowledge();
 
     // Build session+memory pairs for context
     const sessionsWithMemory: { session: JournalSession; memory: MemoryNode | null }[] = [];
@@ -421,7 +430,7 @@ export async function detectAndUpdatePatterns(
     }
 
     // Build and run prompt
-    const prompt = buildPatternDetectionPrompt(session, memoryNode, sessionsWithMemory, existingPatterns);
+    const prompt = buildPatternDetectionPrompt(session, memoryNode, sessionsWithMemory, existingPatterns, personalKnowledge);
     const response = await runPatternPrompt(prompt);
 
     // Parse response

@@ -72,6 +72,11 @@ export function useSession() {
   const turnKindRef = useRef<'greeting' | 'normal'>('normal');
   const greetingResolveRef = useRef<(() => void) | null>(null);
 
+  // Set when the user taps to interrupt AI playback. Tells the playback
+  // completion handlers to skip their state-to-idle transition so it can't
+  // clobber the 'listening' state set by the follow-up startRecording().
+  const interruptedRef = useRef(false);
+
   // Builds the Live API callbacks for a session. Transcripts stream in
   // incrementally and are accumulated per turn; messages are written to the
   // database once a turn completes (with their final text).
@@ -156,7 +161,11 @@ export function useSession() {
       outputTranscriptRef.current = '';
       currentUserMsgIdRef.current = null;
       currentAiMsgIdRef.current = null;
-      setConversationState('idle');
+      if (interruptedRef.current) {
+        interruptedRef.current = false;
+      } else {
+        setConversationState('idle');
+      }
 
       if (kind === 'greeting') {
         turnKindRef.current = 'normal';
@@ -328,6 +337,21 @@ export function useSession() {
   const startRecording = useCallback(async () => {
     if (!currentSession) return false;
 
+    // Hard guarantee: Alma never speaks while the mic is open. If anything
+    // (greeting, response, etc.) is playing, kill it before opening the mic.
+    // Only set interruptedRef when there's actually playback to interrupt —
+    // otherwise the next AI turn's completion handler would mis-skip its
+    // state-to-idle transition.
+    if (audio.isPlaying()) {
+      console.warn('[startRecording] playback still active — interrupting');
+      interruptedRef.current = true;
+      await audio.stopPlayback();
+      // The Live server keeps streaming even though we just cut Alma off
+      // locally. Drop any chunks accumulated so far so the next turnComplete
+      // can't play a leftover slice while the mic is open.
+      audioChunksRef.current = [];
+    }
+
     const started = await audio.startRecording((level) => {
       setAudioLevel(level);
     });
@@ -495,8 +519,19 @@ export function useSession() {
       }
     }
 
-    setConversationState('idle');
+    if (interruptedRef.current) {
+      interruptedRef.current = false;
+    } else {
+      setConversationState('idle');
+    }
   }, [currentSession, isRecording, messages]);
+
+  // Tap-to-interrupt entry point: startRecording itself stops any active
+  // playback, so this is just startRecording with a clearer name at call sites.
+  const interruptAndRecord = useCallback(async () => {
+    if (conversationState !== 'responding') return;
+    await startRecording();
+  }, [conversationState, startRecording]);
 
   // Prepare session for ending (fast - just saves basic data)
   // Returns the session ID for use in processing
@@ -504,6 +539,12 @@ export function useSession() {
     if (!currentSession || isEnding) return null;
 
     setIsEnding(true);
+
+    // Cut off any AI playback in-flight so the user isn't talked over while
+    // the session wraps up. interruptedRef tells the playback completion
+    // handlers not to fight state changes that happen below.
+    interruptedRef.current = true;
+    await audio.stopPlayback();
 
     // Close the Live API session (if any) before persisting.
     if (liveSessionRef.current) {
@@ -564,6 +605,7 @@ export function useSession() {
     currentAiMsgIdRef.current = null;
     greetingResolveRef.current = null;
     turnKindRef.current = 'normal';
+    interruptedRef.current = false;
 
     return sessionId;
   }, [currentSession, messages, isEnding]);
@@ -608,6 +650,7 @@ export function useSession() {
     startSession,
     startRecording,
     stopRecording,
+    interruptAndRecord,
     endSession,
     prepareEndSession,
     pauseRecording,
