@@ -387,6 +387,12 @@ export function useSession() {
       turnKindRef.current = 'normal';
       try {
         const pcm = await audio.getRecordingPcmBase64(result.uri);
+        // ~3200 bytes = 100ms at 16kHz mono 16-bit. Anything shorter than
+        // 4096 means the mic almost certainly didn't capture anything and
+        // the model is about to respond to silence.
+        if (pcm.length < 4096) {
+          console.warn('[useSession] PCM is suspiciously small — mic may have failed:', pcm.length);
+        }
         liveSessionRef.current.sendAudioTurn(pcm);
       } catch (error) {
         console.error('Failed to send Live audio turn:', error);

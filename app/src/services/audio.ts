@@ -75,6 +75,17 @@ export async function setupAudioMode(): Promise<void> {
 
 export async function startRecording(onMeteringUpdate?: (level: number) => void): Promise<boolean> {
   try {
+    // Belt-and-suspenders: deactivate any leftover playback session before
+    // switching the audio category to PlayAndRecord. If a prior playback
+    // path didn't clean up (or a future caller introduces a new one), this
+    // prevents the silent-mic regression where the recorder starts but
+    // captures no audio.
+    try {
+      await setIsAudioActiveAsync(false);
+    } catch {
+      // ignore — no active session is fine
+    }
+
     const hasPermission = await requestPermissions();
     if (!hasPermission) {
       console.warn('Audio permission not granted');
@@ -235,11 +246,14 @@ export async function playAudio(uri: string): Promise<void> {
     isCurrentlyPlaying = false;
     const myPlaybackId = ++currentPlaybackId;
 
-    // Force the iOS playback session into PLAYBACK + active BEFORE play(). The
-    // previous version set the mode but didn't activate, so the very first
-    // greeting could queue audio against an inactive session and only drain
-    // once startRecording flipped categories — which is exactly when the mic
-    // was already open. setIsAudioActiveAsync ensures the session is hot.
+    // iOS playback session lifecycle: activate BEFORE play() and deactivate
+    // when playback finishes or is torn down (see finish() below and
+    // stopPlayback). The activation matters because without it the very first
+    // greeting queues against an inactive session and only drains once
+    // startRecording flips categories — which is exactly when the mic is
+    // opening. The deactivation matters because if the session stays active
+    // in Playback category, the next startRecording can't switch to
+    // PlayAndRecord cleanly and the recorder silently captures nothing.
     await setAudioModeAsync({
       allowsRecording: false,
       playsInSilentMode: true,
@@ -306,6 +320,10 @@ export async function playAudio(uri: string): Promise<void> {
           player.release();
           player = null;
           isCurrentlyPlaying = false;
+          // Deactivate the iOS audio session so the next startRecording can
+          // cleanly switch to PlayAndRecord. Fire-and-forget — finish() is
+          // synchronous and an already-inactive session is fine.
+          setIsAudioActiveAsync(false).catch(() => {});
         }
         console.log(`Audio playback finished (${reason})`);
         resolve();
@@ -356,6 +374,14 @@ export async function stopPlayback(): Promise<void> {
   // Invalidate any in-flight playbackStatusUpdate listener so it can't resolve
   // a promise that was meant for the player we just released.
   currentPlaybackId++;
+  // Deactivate the iOS audio session so a follow-up startRecording can switch
+  // cleanly from Playback to PlayAndRecord. Without this, the recorder
+  // appears to start but captures no audio.
+  try {
+    await setIsAudioActiveAsync(false);
+  } catch {
+    // ignore — already inactive is fine
+  }
 }
 
 export function isRecording(): boolean {
